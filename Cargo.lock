@@ -30,6 +30,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "avatar-bake"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "avatar-export",
+ "avatar-formats",
+ "bcdec",
+ "glam",
+ "image",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "avatar-export"
 version = "0.1.0"
 dependencies = [

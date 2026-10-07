@@ -12,4 +12,3 @@ bytemuck.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
-avatar-formats = { path = "../avatar-formats" }
