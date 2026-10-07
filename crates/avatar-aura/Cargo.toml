@@ -6,5 +6,22 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image = { workspace = true, features = ["ico"] }
+pollster.workspace = true
+eframe.workspace = true
+rfd.workspace = true
+directories.workspace = true
+toml.workspace = true
+include_dir.workspace = true
+chrono.workspace = true
+sha1.workspace = true
+crc32fast.workspace = true
+miniz_oxide.workspace = true
 avatar-formats = { path = "../avatar-formats" }
 avatar-export = { path = "../avatar-export" }
+avatar-bake = { path = "../avatar-bake" }
+avatar-view = { path = "../avatar-view" }
+stfs = { path = "../stfs" }
