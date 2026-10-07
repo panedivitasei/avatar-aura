@@ -17,7 +17,12 @@ fn fixture() -> Option<PathBuf> {
 }
 
 fn device() -> Option<(wgpu::Device, wgpu::Queue, String)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    // D3D12 on Windows; WGPU_BACKEND, WGPU_DX12_COMPILER and WGPU_DEBUG/WGPU_VALIDATION override.
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    if cfg!(windows) {
+        desc.backends = wgpu::Backends::DX12;
+    }
+    let instance = wgpu::Instance::new(desc.with_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,

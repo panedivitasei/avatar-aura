@@ -441,9 +441,9 @@ impl Viewer {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("avatar-view"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: targets.msaa.as_ref().unwrap_or(view),
+                view: targets.msaa.as_ref().map_or(view, |(msaa, _)| msaa),
                 depth_slice: None,
-                resolve_target: targets.msaa.as_ref().map(|_| view),
+                resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
                     store: wgpu::StoreOp::Store,
@@ -472,6 +472,33 @@ impl Viewer {
             pass.draw(0..6, 0..1);
         }
         self.draw_meshes(&mut pass, true);
+        drop(pass);
+        if let Some((_, group)) = targets.msaa.as_ref() {
+            self.resolve(encoder, view, group);
+        }
+    }
+
+    /// Resolves the samples into `view` with a draw; pass resolve targets read back blank on some D3D12 drivers.
+    fn resolve(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, group: &wgpu::BindGroup) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("avatar-view resolve"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.pipelines.resolve);
+        pass.set_bind_group(0, group, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     fn draw_meshes(&self, pass: &mut wgpu::RenderPass<'_>, blended: bool) {

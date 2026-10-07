@@ -26,6 +26,7 @@ const CONTACT_WGSL: &str = concat!(
     include_str!("shaders/common.wgsl"),
     include_str!("shaders/contact.wgsl")
 );
+const RESOLVE_WGSL: &str = include_str!("shaders/resolve.wgsl");
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -92,6 +93,7 @@ pub fn palette_bytes(palette: &[Mat4]) -> Vec<[f32; 16]> {
 pub struct Pipelines {
     frame_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
+    resolve_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     color_format: wgpu::TextureFormat,
     depth: bool,
@@ -99,6 +101,7 @@ pub struct Pipelines {
     meshes: [wgpu::RenderPipeline; 4],
     pub background: wgpu::RenderPipeline,
     pub contact: wgpu::RenderPipeline,
+    pub resolve: wgpu::RenderPipeline,
 }
 
 impl Pipelines {
@@ -159,6 +162,19 @@ impl Pipelines {
                 },
             ],
         });
+        let resolve_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("avatar-view resolve"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: true,
+                },
+                count: None,
+            }],
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("avatar-view diffuse"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -180,6 +196,11 @@ impl Pipelines {
             bind_group_layouts: &[Some(&frame_layout), Some(&material_layout)],
             immediate_size: 0,
         });
+        let resolve_only = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("avatar-view resolve"),
+            bind_group_layouts: &[Some(&resolve_layout)],
+            immediate_size: 0,
+        });
         let module = |label: &str, source: &str| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(label),
@@ -189,6 +210,7 @@ impl Pipelines {
         let mesh_module = module("avatar-view mesh", MESH_WGSL);
         let background_module = module("avatar-view background", BACKGROUND_WGSL);
         let contact_module = module("avatar-view contact", CONTACT_WGSL);
+        let resolve_module = module("avatar-view resolve", RESOLVE_WGSL);
         let depth_state = |write: bool, compare: wgpu::CompareFunction| {
             depth.then_some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
@@ -288,15 +310,38 @@ impl Pipelines {
             Some(wgpu::BlendState::ALPHA_BLENDING),
             wgpu::CompareFunction::LessEqual,
         );
+        let resolve = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("avatar-view resolve"),
+            layout: Some(&resolve_only),
+            vertex: wgpu::VertexState {
+                module: &resolve_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &resolve_module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(color_format.into())],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
             frame_layout,
             material_layout,
+            resolve_layout,
             sampler,
             color_format,
             depth,
             meshes,
             background,
             contact,
+            resolve,
         }
     }
 
@@ -357,13 +402,14 @@ impl Pipelines {
 /// Multisampled colour and depth attachments for one target size.
 pub struct Targets {
     pub size: (u32, u32),
-    pub msaa: Option<wgpu::TextureView>,
+    /// Multisampled colour view and the bind group `Pipelines::resolve` reads it through.
+    pub msaa: Option<(wgpu::TextureView, wgpu::BindGroup)>,
     pub depth: Option<wgpu::TextureView>,
 }
 
 impl Targets {
     pub fn new(device: &wgpu::Device, pipelines: &Pipelines, width: u32, height: u32) -> Self {
-        let attachment = |label: &str, format: wgpu::TextureFormat| {
+        let attachment = |label: &str, format: wgpu::TextureFormat, usage: wgpu::TextureUsages| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -376,7 +422,7 @@ impl Targets {
                     sample_count: SAMPLE_COUNT,
                     dimension: wgpu::TextureDimension::D2,
                     format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | usage,
                     view_formats: &[],
                 })
                 .create_view(&wgpu::TextureViewDescriptor::default())
@@ -384,10 +430,25 @@ impl Targets {
         let color_format = pipelines.color_format;
         Self {
             size: (width, height),
-            msaa: (SAMPLE_COUNT > 1).then(|| attachment("avatar-view msaa", color_format)),
+            msaa: (SAMPLE_COUNT > 1).then(|| {
+                let view = attachment(
+                    "avatar-view msaa",
+                    color_format,
+                    wgpu::TextureUsages::TEXTURE_BINDING,
+                );
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("avatar-view resolve"),
+                    layout: &pipelines.resolve_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    }],
+                });
+                (view, group)
+            }),
             depth: pipelines
                 .depth
-                .then(|| attachment("avatar-view depth", DEPTH_FORMAT)),
+                .then(|| attachment("avatar-view depth", DEPTH_FORMAT, wgpu::TextureUsages::empty())),
         }
     }
 }
