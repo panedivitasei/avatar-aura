@@ -7,7 +7,6 @@ publish.workspace = true
 [dependencies]
 thiserror.workspace = true
 glam.workspace = true
-lzxd.workspace = true
 
 [dev-dependencies]
 image.workspace = true

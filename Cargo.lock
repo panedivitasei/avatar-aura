@@ -461,7 +461,6 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "image",
- "lzxd",
  "thiserror 2.0.21",
 ]
 
@@ -1712,12 +1711,6 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
-
-[[package]]
-name = "lzxd"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c17f346186eccb574ba5581acefc514f0c70a642db4f96e245034a0a158a7168"
 
 [[package]]
 name = "memchr"
