@@ -9,3 +9,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 glam.workspace = true
 bytemuck.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true
+avatar-formats = { path = "../avatar-formats" }
