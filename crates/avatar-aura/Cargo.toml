@@ -1,0 +1,10 @@
+[package]
+name = "avatar-aura"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+avatar-formats = { path = "../avatar-formats" }
+avatar-export = { path = "../avatar-export" }

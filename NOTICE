@@ -1,0 +1,3 @@
+The avatar-formats crate ports the avatar asset decoders of the Xenia Xbox 360
+emulator research project (Copyright 2022-2026 Ben Vanik, BSD 3-Clause,
+https://github.com/xenia-project/xenia). The BSD terms apply to those portions.
