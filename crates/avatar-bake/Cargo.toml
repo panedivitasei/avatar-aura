@@ -1,21 +1,16 @@
 [package]
-name = "avatarextract"
+name = "avatar-bake"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "avatarextract"
-path = "src/main.rs"
-
 [dependencies]
 anyhow.workspace = true
+thiserror.workspace = true
 glam.workspace = true
 image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 avatar-formats = { path = "../avatar-formats" }
-avatar-bake = { path = "../avatar-bake" }
 bcdec = { path = "../bcdec" }
-stfs = { path = "../stfs" }
+avatar-export = { path = "../avatar-export" }
