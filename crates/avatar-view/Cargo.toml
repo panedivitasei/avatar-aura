@@ -1,0 +1,16 @@
+[package]
+name = "avatar-view"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+avatar-export = { path = "../avatar-export" }
+wgpu.workspace = true
+glam.workspace = true
+bytemuck.workspace = true
+image.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/avatar-formats", "crates/avatar-export", "crates/avatarextract", "crates/avatar-aura", "crates/stfs", "crates/bcdec"]
+members = ["crates/avatar-formats", "crates/avatar-export", "crates/avatarextract", "crates/avatar-aura", "crates/stfs", "crates/bcdec", "crates/avatar-bake", "crates/avatar-view"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,6 +17,8 @@ lzxd = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 gltf-json = "1.4"
+wgpu = "30"
+pollster = "1"
 
 [profile.release]
 lto = "thin"
