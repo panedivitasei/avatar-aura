@@ -1,1 +1,5 @@
 target/
+crates/avatar-aura/assets/**
+!crates/avatar-aura/assets/avatar-aura.ico
+!crates/avatar-aura/assets/*/
+!crates/avatar-aura/assets/*/.gitkeep
