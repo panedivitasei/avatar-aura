@@ -35,6 +35,8 @@ pub struct Settings {
     pub anim_dir: String,
     pub output: String,
     pub import_closet: String,
+    /// Picked per import, never remembered.
+    #[serde(skip)]
     pub icon_path: String,
     pub formats: FormatFlags,
     pub window: Option<[f32; 2]>,
