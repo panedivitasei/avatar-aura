@@ -567,6 +567,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "build-assets"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "avatar-bake",
+ "avatar-export",
+ "image",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

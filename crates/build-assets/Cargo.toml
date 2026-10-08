@@ -1,0 +1,11 @@
+[package]
+name = "build-assets"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+image.workspace = true
+avatar-bake = { path = "../avatar-bake" }
+avatar-export = { path = "../avatar-export" }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/avatar-formats", "crates/avatar-export", "crates/avatarextract", "crates/avatar-aura", "crates/stfs", "crates/bcdec", "crates/avatar-bake", "crates/avatar-view"]
+members = ["crates/avatar-formats", "crates/avatar-export", "crates/avatarextract", "crates/avatar-aura", "crates/stfs", "crates/bcdec", "crates/avatar-bake", "crates/avatar-view", "crates/build-assets"]
 
 [workspace.package]
 version = "0.1.0"
