@@ -61,7 +61,6 @@ pub struct ExportTab {
     load_all: Option<LoadAllRun>,
     tiles: Option<TileRun>,
     load_all_label: String,
-    load_all_hidden: bool,
     clip: Option<usize>,
     requested_clip: Option<usize>,
     no_animation: bool,
@@ -112,7 +111,6 @@ impl ExportTab {
             load_all: None,
             tiles: None,
             load_all_label: String::new(),
-            load_all_hidden: false,
             clip: None,
             requested_clip: None,
             no_animation: false,
@@ -185,7 +183,7 @@ impl ExportTab {
         });
     }
 
-    fn on_loaded(&mut self, rebuilt: Rebuilt) {
+    fn on_loaded(&mut self, rebuilt: Rebuilt, jobs: &Jobs) {
         self.session += 1;
         self.lane_queue.clear();
         self.lane_busy = None;
@@ -196,7 +194,6 @@ impl ExportTab {
             run.cancel.store(true, Ordering::Relaxed);
         }
         self.load_all_label.clear();
-        self.load_all_hidden = false;
         self.faces.clear();
         self.face = None;
         self.face_selected = None;
@@ -229,6 +226,19 @@ impl ExportTab {
         }
         self.status = format!("{clips} animations available.");
         self.note(self.status.clone());
+        self.start_load_all(jobs);
+    }
+
+    /// Loading an avatar continues straight into the animation library and the strip tiles.
+    fn start_load_all(&mut self, jobs: &Jobs) {
+        let total = self.loaded.as_ref().map_or(0, |l| l.clips.len() * 2);
+        self.load_all = Some(LoadAllRun {
+            cancel: Arc::new(AtomicBool::new(false)),
+            done: 0,
+            total,
+        });
+        self.load_all_label = "Preparing animation library...".into();
+        self.enqueue(LaneTask::LoadAll, jobs);
     }
 
     // ---- the scene lane ----
@@ -380,7 +390,6 @@ impl ExportTab {
                     self.load_all_label = format!("Stopped · {} / {} loaded", result.done, result.total);
                 } else {
                     self.load_all_label = format!("All {clips} animations and face animations loaded.");
-                    self.load_all_hidden = true;
                 }
                 self.note(self.load_all_label.clone());
                 if result.done >= result.total {
@@ -416,7 +425,7 @@ impl ExportTab {
                 }
                 self.loading = false;
                 match result {
-                    Ok(rebuilt) => self.on_loaded(rebuilt),
+                    Ok(rebuilt) => self.on_loaded(rebuilt, jobs),
                     Err(e) => self.fail(e),
                 }
             }
@@ -531,7 +540,6 @@ impl ExportTab {
             done: 0,
             total,
         });
-        self.load_all_hidden = false;
         self.load_all_label = format!("Rendering tiles 0 / {total}");
         let session = self.session;
         let gpu = self.viewport.gpu();
@@ -583,7 +591,6 @@ impl ExportTab {
             Ok(o) if o.done >= o.total => {
                 self.note(format!("Rendered {} tiles in {:.1}s", o.total, o.seconds));
                 self.load_all_label = format!("All {clips} animations and face animations loaded.");
-                self.load_all_hidden = true;
             }
             Ok(o) => {
                 self.load_all_label = format!("Tiles stopped · {} / {} rendered", o.done, o.total);
@@ -1158,7 +1165,7 @@ impl ExportTab {
     ) {
         self.split = settings.split_animations;
         widgets::window_card(ui, rect, "Pose your avatar", |ui| {
-            self.load_all_ui(ui, jobs);
+            self.load_all_ui(ui);
             self.transport_ui(ui);
             let active = self.loaded.is_some() && !self.exporting;
             for (c, channel) in CHANNELS.iter().enumerate() {
@@ -1266,39 +1273,25 @@ impl ExportTab {
         });
     }
 
-    fn load_all_ui(&mut self, ui: &mut egui::Ui, jobs: &Jobs) {
-        if !self.load_all_hidden {
-            let running = self.load_all.is_some() || self.tiles.is_some();
-            let label = if running { "Cancel" } else { "Load All" };
+    fn load_all_ui(&mut self, ui: &mut egui::Ui) {
+        let running = self.load_all.is_some() || self.tiles.is_some();
+        if running {
             let cancelling = self
                 .load_all
                 .as_ref()
                 .map(|r| &r.cancel)
                 .or(self.tiles.as_ref().map(|r| &r.cancel))
                 .is_some_and(|c| c.load(Ordering::Relaxed));
-            let enabled = self.loaded.is_some()
-                && !cancelling
-                && !self.exporting
-                && (running || self.lane_busy.is_none());
-            if widgets::button(ui, label, Kind::Short, enabled).clicked() {
+            if widgets::button(ui, "Cancel", Kind::Short, !cancelling && !self.exporting).clicked() {
                 if let Some(run) = &self.load_all {
                     run.cancel.store(true, Ordering::Relaxed);
                 } else if let Some(run) = &self.tiles {
                     run.cancel.store(true, Ordering::Relaxed);
                     self.load_all_label = "Stopping the tile render...".into();
-                } else {
-                    let total = self.loaded.as_ref().map_or(0, |l| l.clips.len() * 2);
-                    self.load_all = Some(LoadAllRun {
-                        cancel: Arc::new(AtomicBool::new(false)),
-                        done: 0,
-                        total,
-                    });
-                    self.load_all_label = "Preparing animation library...".into();
-                    self.enqueue(LaneTask::LoadAll, jobs);
                 }
             }
+            ui.add_space(12.0);
         }
-        ui.add_space(12.0);
         if !self.load_all_label.is_empty() {
             widgets::muted(ui, &self.load_all_label);
             ui.add_space(12.0);
