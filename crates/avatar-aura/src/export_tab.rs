@@ -1331,10 +1331,11 @@ impl ExportTab {
         clicked
     }
 
-    fn transport_ui(&mut self, ui: &mut egui::Ui) {
+    /// Play, the frame slider and the frame counter, laid out in the footer next to the status text.
+    fn transport_footer(&mut self, ui: &mut egui::Ui) {
         let usable = self.clip.is_some() && !self.no_animation && !self.free_pose && self.loaded.is_some();
         let label = if self.playing { "Pause" } else { "Play" };
-        if Self::transport_row(ui, label, usable, &format!("Frame {}", self.frame)) {
+        if widgets::button(ui, label, Kind::Short, usable).clicked() {
             if self.playing {
                 self.pause();
             } else {
@@ -1342,13 +1343,25 @@ impl ExportTab {
                 self.playhead = f64::from(self.frame) / self.clip_fps();
             }
         }
-        ui.add_space(17.0);
+        ui.add_space(14.0);
         let mut frame = self.frame;
         let max = self.clip_frames().saturating_sub(1);
-        if widgets::slider(ui, &mut frame, max, usable).changed() {
+        let changed = ui
+            .allocate_ui_with_layout(
+                egui::vec2(260.0, 10.0),
+                Layout::left_to_right(Align::Center),
+                |ui| widgets::slider(ui, &mut frame, max, usable).changed(),
+            )
+            .inner;
+        if changed {
             self.seek(frame);
         }
-        ui.add_space(16.0);
+        ui.add_space(14.0);
+        widgets::text(ui, format!("Frame {}", self.frame), 12.0, W::Regular, c::TEXT);
+    }
+
+    /// The selected clip's name under the Load All row.
+    fn transport_ui(&mut self, ui: &mut egui::Ui) {
         let clip_name = match (
             self.no_animation,
             self.clip.and_then(|c| self.loaded.as_ref()?.clips.get(c)),
@@ -1542,8 +1555,10 @@ impl ExportTab {
                             .font(widgets::font(11.0, W::Regular))
                             .color(c::MUTED),
                     )
-                    .truncate(),
+                    .wrap_mode(egui::TextWrapMode::Extend),
                 );
+                ui.add_space(24.0);
+                self.transport_footer(ui);
             });
         });
     }
