@@ -12,7 +12,7 @@ use crate::jobs::{color_image, ImportPreview, Jobs, Msg};
 use crate::paths;
 use crate::settings::Settings;
 use crate::viewport::Viewport;
-use crate::widgets::{self, Pick, Tile};
+use crate::widgets::{self, c, Kind, Pick, Tile, W};
 
 pub struct ImportTab {
     pub viewport: Viewport,
@@ -28,7 +28,7 @@ pub struct ImportTab {
     summary: String,
     pub status: String,
     log: Vec<String>,
-    log_open: bool,
+    log_dialog: widgets::LogDialog,
     award_open: bool,
     titles: Vec<(String, String)>,
     award_title: String,
@@ -55,7 +55,7 @@ impl ImportTab {
             summary: "Choose items to see validation results.".into(),
             status: String::new(),
             log: Vec::new(),
-            log_open: false,
+            log_dialog: widgets::LogDialog::default(),
             award_open: false,
             titles: Vec::new(),
             award_title: String::new(),
@@ -318,93 +318,62 @@ impl ImportTab {
     }
 
     pub fn windows(&mut self, ctx: &egui::Context, jobs: &Jobs, settings: &mut Settings) {
-        widgets::log_window(ctx, "Validation log", &mut self.log_open, &self.log);
-        let mut open = self.award_open;
+        self.log_dialog.show(ctx, "Validation log", &self.log);
+        if !self.award_open {
+            return;
+        }
         let mut install = false;
-        egui::Window::new("Avatar award icons")
-            .open(&mut open)
-            .default_width(460.0)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label(
-                    RichText::new("Award imports require a game icon. You can also replace an installed game's icon here.")
-                        .weak(),
-                );
-                widgets::path_row(ui, "Game icon", &mut settings.icon_path, Pick::File, "PNG, JPEG, BMP or GIF");
-                ui.label("Installed game");
-                ui.horizontal(|ui| {
-                    let current = self
-                        .titles
-                        .iter()
-                        .find(|(id, _)| *id == self.award_title)
-                        .map(|(id, name)| format!("{} ({id})", if name.is_empty() { id } else { name }))
-                        .unwrap_or_else(|| "Choose an installed game".into());
-                    egui::ComboBox::from_id_salt("award-title")
-                        .selected_text(current)
-                        .width((ui.available_width() - 80.0).max(120.0))
-                        .show_ui(ui, |ui| {
-                            for (id, name) in &self.titles {
-                                let label = format!("{} ({id})", if name.is_empty() { id } else { name });
-                                ui.selectable_value(&mut self.award_title, id.clone(), label);
-                            }
-                        });
-                    install = ui.button("Set icon").clicked();
-                });
+        self.award_open = widgets::dialog(ctx, "award-dialog", "Avatar award icons", |ui| {
+            widgets::muted(
+                ui,
+                "Award imports require a game icon. You can also replace an installed game's icon here.",
+            );
+            ui.add_space(12.0);
+            widgets::path_row(
+                ui,
+                "Game icon",
+                &mut settings.icon_path,
+                Pick::File,
+                "PNG, JPEG, BMP or GIF",
+            );
+            ui.add_space(24.0);
+            let label = |id: &str, name: &str| format!("{} ({id})", if name.is_empty() { id } else { name });
+            let current = self
+                .titles
+                .iter()
+                .find(|(id, _)| *id == self.award_title)
+                .map(|(id, name)| label(id, name))
+                .unwrap_or_else(|| "Choose an installed game".into());
+            let mut options = vec!["Choose an installed game".to_string()];
+            options.extend(self.titles.iter().map(|(id, name)| label(id, name)));
+            let titles = &self.titles;
+            let award_title = &mut self.award_title;
+            install = widgets::field_row(ui, "Installed game", "Set icon", true, |ui, w| {
+                if let Some(k) = widgets::select(ui, "award-title", &current, &options, w) {
+                    *award_title = k
+                        .checked_sub(1)
+                        .and_then(|k| titles.get(k))
+                        .map(|(id, _)| id.clone())
+                        .unwrap_or_default();
+                }
             });
-        self.award_open = open;
+            ui.add_space(12.0);
+        });
         if install {
             self.install_icon(jobs, settings);
         }
     }
 
     pub fn central(&mut self, ui: &mut egui::Ui, jobs: &Jobs, settings: &mut Settings) {
-        widgets::section_heading(
-            ui,
-            "YOUR COLLECTION",
-            "Import avatar items into your closet",
-            "Validate STFS containers or raw .bin files, then add their items and awards to your closet.",
-        );
-        ui.add_space(6.0);
-        egui::Panel::right("import-side")
-            .resizable(false)
-            .default_size(340.0)
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
-                left: 10,
-                ..Default::default()
-            }))
-            .show(ui, |ui| self.side(ui, jobs, settings));
-        egui::CentralPanel::no_frame().show(ui, |ui| self.stage(ui, jobs, settings));
+        let rect = ui.max_rect();
+        let right_w = ((rect.width() - 18.0) / 2.6).max(320.0);
+        let stage = Rect::from_min_max(rect.min, egui::pos2(rect.max.x - right_w - 18.0, rect.max.y));
+        let side = Rect::from_min_max(egui::pos2(rect.max.x - right_w, rect.min.y), rect.max);
+        widgets::in_rect(ui, stage, |ui| self.stage(ui, stage, jobs, settings));
+        widgets::in_rect(ui, side, |ui| self.side(ui, side, jobs, settings));
     }
 
-    fn stage(&mut self, ui: &mut egui::Ui, jobs: &Jobs, settings: &Settings) {
-        let full = ui.available_rect_before_wrap();
-        let strip_h = 112.0;
-        let view = Rect::from_min_max(
-            full.min,
-            egui::pos2(full.max.x, (full.max.y - strip_h - 8.0).max(full.min.y + 80.0)),
-        );
-        self.viewport.show(ui, view, &[]);
-        if self.viewport.viewer.is_none() {
-            ui.put(view, |ui: &mut egui::Ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(view.height() * 0.4);
-                    ui.label(RichText::new("Preview items on a mannequin").size(17.0).strong());
-                    ui.label(RichText::new("Choose files, then select an item below.").weak());
-                })
-                .response
-            });
-        }
-        if !self.preview_status.is_empty() {
-            ui.painter().text(
-                view.left_bottom() + egui::vec2(10.0, -10.0),
-                egui::Align2::LEFT_BOTTOM,
-                &self.preview_status,
-                egui::FontId::proportional(12.5),
-                ui.visuals().weak_text_color(),
-            );
-        }
-        ui.advance_cursor_after_rect(view);
-        ui.add_space(8.0);
+    fn stage(&mut self, ui: &mut egui::Ui, full: Rect, jobs: &Jobs, settings: &Settings) {
         let tiles: Vec<Tile> = self
             .items
             .iter()
@@ -420,116 +389,154 @@ impl ImportTab {
                 badge: Some(item.bodies.to_string()),
             })
             .collect();
-        if tiles.is_empty() {
-            ui.label(RichText::new("Validated items appear here.").weak());
-        } else if let Some(i) = widgets::strip(
-            ui,
-            "import-items",
-            &tiles,
-            self.selected.map(|s| s.to_string()).as_deref(),
-            true,
-        ) {
-            self.preview(i, jobs, settings);
+        let strip_h = if tiles.is_empty() {
+            96.0
+        } else {
+            96.0f32.max(widgets::strip_height(ui, &tiles, full.width()))
+        };
+        let view = Rect::from_min_max(
+            full.min,
+            egui::pos2(full.max.x, (full.max.y - strip_h - 10.0).max(full.min.y + 80.0)),
+        );
+        self.viewport.show(ui, view, &[]);
+        let painter = ui.painter().clone();
+        if self.viewport.viewer.is_none() {
+            let total = widgets::line(15.0) + 10.0 + 12.0 + widgets::line(12.0);
+            let y = view.center().y - total / 2.0;
+            painter.text(
+                egui::pos2(view.center().x, y),
+                egui::Align2::CENTER_TOP,
+                "Preview items on a mannequin",
+                widgets::font(15.0, W::Semibold),
+                c::STAGE_TEXT,
+            );
+            painter.text(
+                egui::pos2(view.center().x, y + widgets::line(15.0) + 22.0),
+                egui::Align2::CENTER_TOP,
+                "Choose files, then select an item below.",
+                widgets::font(12.0, W::Regular),
+                c::STAGE_TEXT,
+            );
+        }
+        if !self.preview_status.is_empty() {
+            painter.text(
+                view.left_bottom() + egui::vec2(14.0, -12.0),
+                egui::Align2::LEFT_BOTTOM,
+                &self.preview_status,
+                widgets::font(11.0, W::Regular),
+                c::CAPTION,
+            );
+        }
+        let strip = Rect::from_min_max(egui::pos2(full.min.x, view.max.y + 10.0), full.max);
+        if !tiles.is_empty() {
+            let selected = self.selected.map(|s| s.to_string());
+            let clicked = widgets::in_rect(ui, strip, |ui| {
+                widgets::strip(ui, "import-items", &tiles, selected.as_deref(), true)
+            });
+            if let Some(i) = clicked {
+                self.preview(i, jobs, settings);
+            }
         }
     }
 
-    fn side(&mut self, ui: &mut egui::Ui, jobs: &Jobs, settings: &mut Settings) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            widgets::card(ui, "Import items", |ui| {
-                egui::Frame::group(ui.style())
-                    .inner_margin(egui::Margin::same(12))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.vertical_centered(|ui| {
-                            ui.label(RichText::new("Choose items to import").strong().size(15.0));
-                            ui.label(
-                                RichText::new(
-                                    "STFS containers & raw .bin avatar items, or drop them on the window",
-                                )
-                                .weak(),
-                            );
-                            if ui
-                                .add_enabled(!self.busy, egui::Button::new("Choose items"))
-                                .clicked()
-                            {
-                                if let Some(files) = rfd::FileDialog::new().pick_files() {
-                                    self.take_paths(files, jobs, settings);
-                                }
-                            }
-                        });
-                    });
-                ui.add_space(6.0);
-                ui.label("Input file");
-                let edit = ui.add(
-                    egui::TextEdit::singleline(&mut self.input)
-                        .hint_text("Drop or choose an avatar item")
-                        .desired_width(f32::INFINITY),
-                );
-                if edit.lost_focus() && edit.changed()
-                    || (edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                {
-                    let path = paths::expand(&self.input);
-                    if !path.as_os_str().is_empty() {
-                        self.paths = vec![path];
-                        self.analyze(jobs, settings);
-                    }
-                }
-                if widgets::path_row(
+    fn side(&mut self, ui: &mut egui::Ui, rect: Rect, jobs: &Jobs, settings: &mut Settings) {
+        let dragging = ui.input(|i| !i.raw.hovered_files.is_empty());
+        widgets::window_card(ui, rect, "Import items", |ui| {
+            let w = ui.available_width();
+            let top = ui.cursor().min;
+            let bg = ui.painter().add(egui::Shape::Noop);
+            let mut choose = false;
+            ui.vertical_centered(|ui| {
+                ui.add_space(15.0);
+                widgets::text(ui, "Choose items to import", 15.0, W::Semibold, c::TEXT);
+                ui.add_space(10.0);
+                widgets::text(
                     ui,
-                    "Closet destination",
-                    &mut settings.import_closet,
-                    Pick::Folder,
-                    "Choose a closet folder",
-                ) {
+                    "STFS containers & raw .bin avatar items",
+                    11.0,
+                    W::Regular,
+                    c::TEXT,
+                );
+                ui.add_space(12.0);
+                choose = widgets::button(ui, "Choose items", Kind::Short, !self.busy).clicked();
+                ui.add_space(15.0);
+            });
+            let target = Rect::from_min_max(top, egui::pos2(top.x + w, ui.cursor().min.y));
+            let (fill, stroke) = if dragging {
+                (widgets::rgb(0xE0F3C7), widgets::rgb(0x80B948))
+            } else {
+                (widgets::rgb(0xEFF7E6), widgets::rgb(0xA8BC92))
+            };
+            ui.painter().set(bg, egui::Shape::rect_filled(target, 7.0, fill));
+            widgets::dashed_rect(ui.painter(), target, 7.0, egui::Stroke::new(1.0, stroke));
+            if dragging {
+                ui.painter().rect_stroke(
+                    target,
+                    7.0,
+                    egui::Stroke::new(3.0, stroke),
+                    egui::StrokeKind::Outside,
+                );
+            }
+            if choose {
+                if let Some(files) = rfd::FileDialog::new().pick_files() {
+                    self.take_paths(files, jobs, settings);
+                }
+            }
+            ui.add_space(12.0);
+            let edit =
+                widgets::labelled_input(ui, "Input file", &mut self.input, "Drop or choose an avatar item");
+            if edit.lost_focus() && (edit.changed() || ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                let path = paths::expand(&self.input);
+                if !path.as_os_str().is_empty() {
+                    self.paths = vec![path];
+                    self.analyze(jobs, settings);
+                }
+            }
+            ui.add_space(12.0);
+            if widgets::path_row(
+                ui,
+                "Closet destination",
+                &mut settings.import_closet,
+                Pick::Folder,
+                "Choose a closet folder",
+            ) {
+                self.refresh_titles(jobs, settings);
+            }
+            ui.add_space(12.0);
+            widgets::muted(ui, &self.summary);
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if widgets::button(ui, "Avatar award icons", Kind::Short, true).clicked() {
+                    self.award_open = true;
                     self.refresh_titles(jobs, settings);
                 }
-                ui.add_space(6.0);
-                ui.label(RichText::new(&self.summary).weak());
-                if let Some(item) = self.selected.and_then(|i| self.items.get(i)) {
-                    ui.label(RichText::new(&item.name).strong());
-                    ui.label(format!("{} · {}", item.categories, item.bodies));
-                    ui.label(RichText::new(&item.guid).monospace().size(11.0));
-                    if item.award {
-                        ui.label(
-                            RichText::new("Avatar award: needs a game icon to import").color(widgets::ACCENT),
-                        );
-                    }
+                ui.add_space(8.0);
+                if widgets::button(ui, "Validation log", Kind::Short, true).clicked() {
+                    self.log_dialog.open();
                 }
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Avatar award icons").clicked() {
-                        self.award_open = true;
-                        self.refresh_titles(jobs, settings);
-                    }
-                    if ui.button("Validation log").clicked() {
-                        self.log_open = true;
-                    }
-                });
             });
         });
     }
 
     pub fn footer(&mut self, ui: &mut egui::Ui, jobs: &Jobs, settings: &Settings) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(&self.status).weak());
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let import = egui::Button::new(RichText::new("Import").strong())
-                    .fill(widgets::ACCENT.gamma_multiply(0.25));
-                if ui.add_enabled(!self.busy && self.validated, import).clicked() {
-                    self.import(jobs, settings);
-                }
-                if ui
-                    .add_enabled(
-                        !self.busy && !self.paths.is_empty(),
-                        egui::Button::new("Validate"),
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::button(ui, "Import", Kind::Primary, !self.busy && self.validated).clicked() {
+                self.import(jobs, settings);
+            }
+            ui.add_space(10.0);
+            if widgets::button(ui, "Validate", Kind::Short, !self.busy && !self.paths.is_empty()).clicked() {
+                self.analyze(jobs, settings);
+            }
+            ui.add_space(12.0);
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&self.status)
+                            .font(widgets::font(11.0, W::Regular))
+                            .color(c::MUTED),
                     )
-                    .clicked()
-                {
-                    self.analyze(jobs, settings);
-                }
-                if self.busy || self.previewing {
-                    ui.spinner();
-                }
+                    .truncate(),
+                );
             });
         });
     }

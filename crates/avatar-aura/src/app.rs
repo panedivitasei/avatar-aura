@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, RichText};
+use eframe::egui::{self, pos2, Color32, Rect, RichText, Sense, Stroke};
 
 use crate::catalog::{self, Catalog};
 use crate::export_tab::ExportTab;
@@ -13,7 +13,7 @@ use crate::jobs::{rgba_to_color, Jobs, Msg};
 use crate::paths;
 use crate::settings::Settings;
 use crate::viewport::Viewport;
-use crate::widgets::ACCENT;
+use crate::widgets::{self, c, Kind, Paint, W};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -37,16 +37,126 @@ pub struct AuraApp {
 }
 
 fn style(ctx: &egui::Context) {
+    widgets::install_fonts(ctx);
     ctx.set_theme(egui::Theme::Light);
+    // The original's WebView2 host draws a dark caption bar.
+    ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
     ctx.style_mut_of(egui::Theme::Light, |style| {
-        style.visuals.selection.bg_fill = ACCENT;
-        style.visuals.selection.stroke.color = egui::Color32::WHITE;
-        style.visuals.hyperlink_color = ACCENT;
-        style.visuals.panel_fill = egui::Color32::from_rgb(0xE8, 0xEC, 0xE4);
-        style.visuals.window_fill = egui::Color32::from_rgb(0xF7, 0xF8, 0xF5);
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(10.0, 4.0);
+        let v = &mut style.visuals;
+        v.selection.bg_fill = c::GREEN.gamma_multiply(0.35);
+        v.selection.stroke = Stroke::new(1.0, c::TEXT);
+        v.hyperlink_color = c::GREEN;
+        v.panel_fill = c::ROOT_BG;
+        v.window_fill = c::INPUT_BG;
+        v.extreme_bg_color = c::INPUT_BG;
+        v.override_text_color = Some(c::TEXT);
+        v.text_cursor.stroke = Stroke::new(1.5, c::INPUT_TEXT);
+        style.spacing.item_spacing = egui::Vec2::ZERO;
+        style.spacing.button_padding = egui::vec2(10.0, 8.0);
+        style.spacing.scroll = egui::style::ScrollStyle::thin();
+        style
+            .text_styles
+            .insert(egui::TextStyle::Body, widgets::font(14.0, W::Regular));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Button, widgets::font(13.0, W::Regular));
     });
+}
+
+/// `.masthead`: gradient band, the gradient-filled Yesterday title and the short rule under it.
+fn masthead(painter: &egui::Painter, rect: Rect) {
+    widgets::fill(
+        painter,
+        rect,
+        0.0,
+        &Paint::Linear(
+            110.0,
+            &[
+                (0.0, widgets::rgba(0xFFFF_FF90)),
+                (0.5, widgets::rgba(0xD4F0_B644)),
+                (1.0, widgets::rgba(0xBEDC_EC44)),
+            ],
+        ),
+    );
+    let mut job = egui::text::LayoutJob::single_section(
+        "avatar aura".into(),
+        egui::TextFormat {
+            font_id: widgets::yesterday(42.0),
+            extra_letter_spacing: 42.0 * 0.015,
+            color: Color32::WHITE,
+            ..Default::default()
+        },
+    );
+    job.wrap.max_width = f32::INFINITY;
+    let galley = painter.layout_job(job);
+    // h1 box: 2px top padding, 46.2px line box, 7px bottom padding.
+    let top = rect.min.y + 22.0;
+    let line_box = Rect::from_min_size(
+        pos2(rect.min.x + 32.0, top + 2.0),
+        egui::vec2(galley.size().x, 46.2),
+    );
+    let pos = pos2(line_box.min.x, line_box.center().y - galley.size().y / 2.0);
+    let box_rect = Rect::from_min_max(
+        pos2(line_box.min.x - 2.0, top),
+        pos2(line_box.max.x + 2.0, top + 55.2),
+    );
+    painter.galley_with_override_text_color(
+        pos + egui::vec2(0.0, 2.5),
+        galley.clone(),
+        widgets::rgba(0x526B_3526),
+    );
+    painter.galley_with_override_text_color(pos + egui::vec2(0.0, 1.0), galley.clone(), Color32::WHITE);
+    let stops = [
+        (0.03, widgets::rgb(0xBADB7D)),
+        (0.39, widgets::rgb(0x71983C)),
+        (0.48, widgets::rgb(0x3F621E)),
+        (0.52, widgets::rgb(0x7AA541)),
+        (0.91, widgets::rgb(0x456B24)),
+    ];
+    let bands = box_rect.height().ceil() as usize;
+    for b in 0..bands {
+        let y0 = box_rect.min.y + b as f32;
+        let t = (b as f32 + 0.5) / box_rect.height();
+        let color = stop_color(&stops, t);
+        let band = Rect::from_min_max(
+            pos2(box_rect.min.x - 4.0, y0),
+            pos2(box_rect.max.x + 8.0, y0 + 1.0),
+        );
+        painter
+            .with_clip_rect(band.intersect(painter.clip_rect()))
+            .galley_with_override_text_color(pos, galley.clone(), color);
+    }
+    let rule = Rect::from_min_size(
+        pos2(rect.min.x + 30.0, rect.max.y - 1.0),
+        egui::vec2(330.0f32.min(rect.width() * 0.55), 1.0),
+    );
+    widgets::fill(
+        painter,
+        rule,
+        0.0,
+        &Paint::Linear(
+            90.0,
+            &[
+                (0.0, widgets::rgba(0x759C_42A0)),
+                (1.0, widgets::rgba(0xE1EF_C800)),
+            ],
+        ),
+    );
+}
+
+fn stop_color(stops: &[(f32, Color32)], t: f32) -> Color32 {
+    let mut prev = stops[0];
+    if t <= prev.0 {
+        return prev.1;
+    }
+    for &(at, color) in &stops[1..] {
+        if t <= at {
+            let k = (t - prev.0) / (at - prev.0);
+            return prev.1.lerp_to_gamma(color, k);
+        }
+        prev = (at, color);
+    }
+    prev.1
 }
 
 impl AuraApp {
@@ -139,20 +249,6 @@ impl AuraApp {
             self.tab = Tab::Import;
             self.import.take_paths(dropped, &self.jobs, &self.settings);
         }
-        let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
-        if hovering {
-            let screen = ctx.content_rect();
-            let painter =
-                ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop")));
-            painter.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(90));
-            painter.text(
-                screen.center(),
-                egui::Align2::CENTER_CENTER,
-                "Drop avatar items to validate them",
-                egui::FontId::proportional(22.0),
-                egui::Color32::WHITE,
-            );
-        }
     }
 
     fn persist(&mut self, ctx: &egui::Context) {
@@ -169,6 +265,70 @@ impl AuraApp {
             } else {
                 ctx.request_repaint_after(Duration::from_secs(5));
             }
+        }
+    }
+
+    /// The `nav` tab row: plain text tabs with a 4px underline, then the 1px line under the row.
+    fn nav(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let mut x = rect.min.x + 30.0;
+        for (tab, label) in [(Tab::Import, "Import"), (Tab::Export, "Export")] {
+            let on = self.tab == tab;
+            let (weight, color) = if on {
+                (W::Heavy, c::TAB_ON)
+            } else {
+                (W::Regular, c::TAB)
+            };
+            let galley = ui
+                .painter()
+                .layout_no_wrap(label.into(), widgets::font(18.0, weight), color);
+            let tab_rect = Rect::from_min_size(pos2(x, rect.min.y), egui::vec2(galley.size().x + 8.0, 48.0));
+            let response = ui.interact(tab_rect, egui::Id::new(("tab", label)), Sense::click());
+            if response.clicked() {
+                self.tab = tab;
+            }
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            ui.painter().galley(
+                pos2(
+                    x + 4.0,
+                    tab_rect.min.y + 10.0 + (widgets::line(18.0) - galley.size().y) / 2.0,
+                ),
+                galley,
+                color,
+            );
+            if on {
+                ui.painter().rect_filled(
+                    Rect::from_min_max(pos2(tab_rect.min.x, tab_rect.max.y - 4.0), tab_rect.max),
+                    0.0,
+                    c::GREEN,
+                );
+            }
+            x = tab_rect.max.x + 28.0;
+        }
+        ui.painter()
+            .hline(rect.x_range(), rect.max.y - 0.5, Stroke::new(1.0, c::LINE));
+        if let Some(last) = self.errors.last().cloned() {
+            let row = Rect::from_min_max(
+                pos2(x + 20.0, rect.min.y + 8.0),
+                pos2(rect.max.x - 30.0, rect.max.y - 9.0),
+            );
+            widgets::in_rect(ui, row, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if widgets::button(ui, "Dismiss", Kind::Short, true).clicked() {
+                        self.errors.clear();
+                    }
+                    ui.add_space(10.0);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(last)
+                                .font(widgets::font(12.0, W::Regular))
+                                .color(c::ERROR),
+                        )
+                        .truncate(),
+                    );
+                });
+            });
         }
     }
 
@@ -196,50 +356,63 @@ impl eframe::App for AuraApp {
         }
         self.persist(&ctx);
 
-        egui::Panel::top("header")
-            .frame(
-                egui::Frame::NONE
-                    .fill(egui::Color32::from_rgb(0xF7, 0xF8, 0xF5))
-                    .inner_margin(egui::Margin::symmetric(16, 10)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("avatar aura").size(22.0).strong().color(ACCENT));
-                    ui.add_space(24.0);
-                    ui.selectable_value(&mut self.tab, Tab::Import, RichText::new("Import").size(15.0));
-                    ui.selectable_value(&mut self.tab, Tab::Export, RichText::new("Export").size(15.0));
-                    if !self.errors.is_empty() {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let last = self.errors.last().cloned().unwrap_or_default();
-                            if ui.small_button("Dismiss").clicked() {
-                                self.errors.clear();
-                            }
-                            ui.label(RichText::new(last).color(egui::Color32::from_rgb(0xB0, 0x30, 0x20)));
-                        });
-                    }
-                });
-            });
-        egui::Panel::bottom("footer")
-            .frame(
-                egui::Frame::NONE
-                    .fill(egui::Color32::from_rgb(0xF7, 0xF8, 0xF5))
-                    .inner_margin(egui::Margin::symmetric(16, 8)),
-            )
-            .show(ui, |ui| match self.tab {
-                Tab::Import => self.import.footer(ui, &self.jobs, &self.settings),
-                Tab::Export => self.export.footer(ui, &self.jobs, &self.settings, &self.catalog),
-            });
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin::same(16)))
-            .show(ui, |ui| match self.tab {
-                Tab::Import => self.import.central(ui, &self.jobs, &mut self.settings),
-                Tab::Export => {
-                    self.export
-                        .central(ui, &self.jobs, &mut self.settings, &self.catalog, &self.thumbs)
-                }
-            });
+        let full = ui.max_rect();
+        let painter = ui.painter().clone();
+        painter.rect_filled(full, 0.0, c::ROOT_BG);
+        widgets::fill(
+            &painter,
+            full,
+            0.0,
+            &Paint::Radial(
+                egui::vec2(0.15, 0.0),
+                &[(0.0, widgets::rgb(0xFBFFF8)), (0.65, Color32::TRANSPARENT)],
+            ),
+        );
+        let mast = Rect::from_min_size(full.min, egui::vec2(full.width(), 83.0));
+        masthead(&painter, mast);
+        let nav = Rect::from_min_size(pos2(full.min.x, mast.max.y), egui::vec2(full.width(), 49.0));
+        self.nav(ui, nav);
+
+        let main_w = full.width().min(1800.0);
+        let main = Rect::from_min_max(
+            pos2(full.center().x - main_w / 2.0 + 30.0, nav.max.y + 14.0),
+            pos2(full.center().x + main_w / 2.0 - 30.0, full.max.y - 18.0),
+        );
+        let heading_h = widgets::line(24.0) + 4.0 + widgets::line(12.0);
+        let heading = Rect::from_min_size(main.min, egui::vec2(main.width(), heading_h));
+        let footer = Rect::from_min_max(pos2(main.min.x, main.max.y - 42.0), main.max);
+        let body = Rect::from_min_max(
+            pos2(main.min.x, heading.max.y + 12.0),
+            pos2(main.max.x, footer.min.y - 12.0),
+        );
+        let (title, blurb) = match self.tab {
+            Tab::Import => (
+                "Import avatar items into your closet",
+                "Validate STFS containers or raw .bin files, then add their items and awards to your closet.",
+            ),
+            Tab::Export => (
+                "Export your avatar as a 3D model",
+                "Choose an animation frame and expression, then export to DAE, GLB, OBJ or SMD.",
+            ),
+        };
+        widgets::in_rect(ui, heading, |ui| widgets::section_heading(ui, title, blurb));
+        widgets::in_rect(ui, body, |ui| match self.tab {
+            Tab::Import => self.import.central(ui, &self.jobs, &mut self.settings),
+            Tab::Export => {
+                self.export
+                    .central(ui, &self.jobs, &mut self.settings, &self.catalog, &self.thumbs)
+            }
+        });
+        widgets::in_rect(ui, footer, |ui| match self.tab {
+            Tab::Import => self.import.footer(ui, &self.jobs, &self.settings),
+            Tab::Export => self.export.footer(ui, &self.jobs, &self.settings, &self.catalog),
+        });
         self.import.windows(&ctx, &self.jobs, &mut self.settings);
         self.export.windows(&ctx, &mut self.settings);
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        c::ROOT_BG.to_normalized_gamma_f32()
     }
 
     fn on_exit(&mut self) {

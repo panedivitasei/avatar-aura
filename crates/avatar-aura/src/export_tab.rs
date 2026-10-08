@@ -17,7 +17,7 @@ use crate::paths;
 use crate::session::{self, ExpressionTextures, Loaded, PreparedFace, TextureCache};
 use crate::settings::Settings;
 use crate::viewport::{Marker, Viewport};
-use crate::widgets::{self, Pick, Tile};
+use crate::widgets::{self, c, Kind, Pick, Tile, W};
 
 /// Editable joints and their labels, from bones.js.
 const JOINTS: [(&str, &str); 16] = [
@@ -59,7 +59,7 @@ pub struct ExportTab {
     pub viewport: Viewport,
     textures: Arc<TextureCache>,
     log: Vec<String>,
-    log_open: bool,
+    log_dialog: widgets::LogDialog,
     source_open: bool,
     pub status: String,
     loaded: Option<Loaded>,
@@ -108,7 +108,7 @@ impl ExportTab {
             viewport,
             textures: Arc::new(TextureCache::default()),
             log: Vec::new(),
-            log_open: false,
+            log_dialog: widgets::LogDialog::default(),
             source_open: false,
             status: "The moment on screen becomes the file.".into(),
             loaded: None,
@@ -880,36 +880,42 @@ impl ExportTab {
     // ---- UI ----
 
     pub fn windows(&mut self, ctx: &egui::Context, settings: &mut Settings) {
-        widgets::log_window(ctx, "Activity log", &mut self.log_open, &self.log);
-        egui::Window::new("Avatar source")
-            .open(&mut self.source_open)
-            .default_width(520.0)
-            .resizable(false)
-            .show(ctx, |ui| {
-                widgets::path_row(
-                    ui,
-                    "Saved avatar",
-                    &mut settings.manifest,
-                    Pick::File,
-                    "avatar_manifest.bin",
-                );
-                widgets::path_row(
-                    ui,
-                    "Asset pack",
-                    &mut settings.pack,
-                    Pick::File,
-                    "AvatarAssetPack.toc",
-                );
-                widgets::path_row(ui, "Closet", &mut settings.closet, Pick::Folder, "closet folder");
-                widgets::path_row(
-                    ui,
-                    "Extra animations folder (optional)",
-                    &mut settings.anim_dir,
-                    Pick::Folder,
-                    "*.AvatarAnimation files",
-                );
-                ui.label(RichText::new("Changes take effect on the next Load avatar.").weak());
+        self.log_dialog.show(ctx, "Activity log", &self.log);
+        if self.source_open {
+            self.source_open = widgets::dialog(ctx, "source-dialog", "Avatar source", |ui| {
+                let col = (ui.available_width() - 18.0) / 2.0;
+                let fields: [(&str, &mut String, Pick, &str); 4] = [
+                    ("Saved avatar", &mut settings.manifest, Pick::File, ""),
+                    ("Asset pack", &mut settings.pack, Pick::File, ""),
+                    ("Closet", &mut settings.closet, Pick::Folder, ""),
+                    (
+                        "Extra animations folder (optional)",
+                        &mut settings.anim_dir,
+                        Pick::Folder,
+                        "*.AvatarAnimation files",
+                    ),
+                ];
+                let mut fields = fields.into_iter();
+                while let Some(first) = fields.next() {
+                    let second = fields.next();
+                    ui.horizontal_top(|ui| {
+                        for (i, (label, value, pick, hint)) in
+                            std::iter::once(first).chain(second).enumerate()
+                        {
+                            if i > 0 {
+                                ui.add_space(18.0);
+                            }
+                            ui.vertical(|ui| {
+                                ui.set_width(col);
+                                ui.add_space(12.0);
+                                widgets::path_row(ui, label, value, pick, hint);
+                                ui.add_space(12.0);
+                            });
+                        }
+                    });
+                }
             });
+        }
     }
 
     pub fn central(
@@ -920,26 +926,17 @@ impl ExportTab {
         catalog: &Catalog,
         thumbs: &HashMap<String, egui::TextureHandle>,
     ) {
-        widgets::section_heading(
-            ui,
-            "YOUR AVATAR",
-            "Export your avatar as a 3D model",
-            "Choose an animation frame and expression, then export to DAE, GLB, OBJ or SMD.",
-        );
-        ui.add_space(6.0);
-        egui::Panel::right("export-side")
-            .resizable(false)
-            .default_size(360.0)
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin {
-                left: 10,
-                ..Default::default()
-            }))
-            .show(ui, |ui| self.side(ui, jobs, settings, catalog, thumbs));
-        egui::CentralPanel::no_frame().show(ui, |ui| self.stage(ui, jobs, settings, catalog));
+        let rect = ui.max_rect();
+        let right_w = ((rect.width() - 18.0) / 2.6).max(320.0);
+        let stage = Rect::from_min_max(rect.min, egui::pos2(rect.max.x - right_w - 18.0, rect.max.y));
+        let side = Rect::from_min_max(egui::pos2(rect.max.x - right_w, rect.min.y), rect.max);
+        widgets::in_rect(ui, stage, |ui| self.stage(ui, stage, jobs, settings, catalog));
+        widgets::in_rect(ui, side, |ui| {
+            self.side(ui, side, jobs, settings, catalog, thumbs)
+        });
     }
 
-    fn stage(&mut self, ui: &mut egui::Ui, jobs: &Jobs, settings: &Settings, catalog: &Catalog) {
-        let rect = ui.available_rect_before_wrap();
+    fn stage(&mut self, ui: &mut egui::Ui, rect: Rect, jobs: &Jobs, settings: &Settings, catalog: &Catalog) {
         let markers: Vec<Marker> = if self.free_pose {
             JOINTS
                 .iter()
@@ -959,38 +956,46 @@ impl ExportTab {
                 self.move_mode = false;
             }
         }
+        let painter = ui.painter().clone();
         if self.viewport.viewer.is_none() {
-            let card = Rect::from_center_size(rect.center(), egui::vec2(320.0, 130.0));
-            ui.put(card, |ui: &mut egui::Ui| {
-                ui.vertical_centered(|ui| {
-                    ui.label(
-                        RichText::new("Your avatar takes the stage here")
-                            .size(17.0)
-                            .strong(),
-                    );
-                    ui.label(RichText::new("Load a saved avatar to begin.").weak());
-                    ui.add_space(6.0);
-                    let button = egui::Button::new(RichText::new("Load avatar").strong())
-                        .fill(widgets::ACCENT.gamma_multiply(0.25));
-                    if ui.add_enabled(!self.loading, button).clicked() {
-                        self.load(jobs, settings, catalog);
-                    }
-                    if self.loading {
-                        ui.spinner();
-                    }
-                })
-                .response
-            });
+            let button_h = widgets::line(13.0) + 16.0;
+            let total = widgets::line(15.0) + 10.0 + 12.0 + widgets::line(12.0) + 12.0 + button_h;
+            let mut y = rect.center().y - total / 2.0;
+            painter.text(
+                egui::pos2(rect.center().x, y),
+                egui::Align2::CENTER_TOP,
+                "Your avatar takes the stage here",
+                widgets::font(15.0, W::Semibold),
+                c::STAGE_TEXT,
+            );
+            y += widgets::line(15.0) + 10.0 + 12.0;
+            painter.text(
+                egui::pos2(rect.center().x, y),
+                egui::Align2::CENTER_TOP,
+                "Load a saved avatar to begin.",
+                widgets::font(12.0, W::Regular),
+                c::STAGE_TEXT,
+            );
+            y += widgets::line(12.0) + 12.0;
+            let w = painter
+                .layout_no_wrap("Load avatar".into(), widgets::font(13.0, W::Regular), c::TEXT)
+                .size()
+                .x
+                + 20.0;
+            let button =
+                Rect::from_min_size(egui::pos2(rect.center().x - w / 2.0, y), egui::vec2(w, button_h));
+            if widgets::button_in(ui, button, "Load avatar", Kind::Primary, !self.loading).clicked() {
+                self.load(jobs, settings, catalog);
+            }
         } else {
-            ui.painter().text(
-                rect.left_bottom() + egui::vec2(10.0, -10.0),
+            painter.text(
+                rect.left_bottom() + egui::vec2(14.0, -12.0),
                 egui::Align2::LEFT_BOTTOM,
-                "Drag to orbit · Right-drag to pan · Scroll to zoom",
-                egui::FontId::proportional(12.0),
-                ui.visuals().weak_text_color(),
+                "Drag to orbit \u{b7} Scroll to zoom",
+                widgets::font(11.0, W::Regular),
+                c::CAPTION,
             );
         }
-        ui.advance_cursor_after_rect(rect);
     }
 
     fn expression_tiles(
@@ -1071,29 +1076,34 @@ impl ExportTab {
     fn side(
         &mut self,
         ui: &mut egui::Ui,
+        rect: Rect,
         jobs: &Jobs,
         settings: &mut Settings,
         catalog: &Catalog,
         thumbs: &HashMap<String, egui::TextureHandle>,
     ) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            widgets::card(ui, "Pose your avatar", |ui| {
-                self.load_all_ui(ui, jobs);
-                self.transport_ui(ui);
-                let active = self.loaded.is_some() && !self.exporting;
-                for (c, channel) in CHANNELS.iter().enumerate() {
-                    ui.label(RichText::new(catalog_title(channel)).strong());
-                    let tiles = self.expression_tiles(channel, catalog, thumbs);
-                    let selected = match self.expression[c] {
-                        Some(n) => format!("{channel}:{n}"),
-                        None => format!("{channel}:none"),
-                    };
-                    if let Some(i) = widgets::strip(ui, channel, &tiles, Some(&selected), active) {
-                        let value = tiles[i].key.rsplit(':').next().and_then(|v| v.parse().ok());
-                        self.choose_expression(c, value, jobs);
-                    }
+        widgets::window_card(ui, rect, "Pose your avatar", |ui| {
+            self.load_all_ui(ui, jobs);
+            self.transport_ui(ui);
+            let active = self.loaded.is_some() && !self.exporting;
+            for (c, channel) in CHANNELS.iter().enumerate() {
+                ui.add_space(16.0);
+                widgets::h3(ui, catalog_title(channel));
+                let tiles = self.expression_tiles(channel, catalog, thumbs);
+                let selected = match self.expression[c] {
+                    Some(n) => format!("{channel}:{n}"),
+                    None => format!("{channel}:none"),
+                };
+                if let Some(i) = widgets::strip(ui, channel, &tiles, Some(&selected), active) {
+                    let value = tiles[i].key.rsplit(':').next().and_then(|v| v.parse().ok());
+                    self.choose_expression(c, value, jobs);
                 }
-                ui.label(RichText::new("Animation").strong());
+            }
+            ui.add_space(16.0);
+            widgets::h3(ui, "Animation");
+            if self.loaded.is_none() {
+                widgets::muted(ui, "Load an avatar to choose a clip.");
+            } else {
                 let tiles = self.clip_tiles("No animation", catalog, thumbs);
                 let selected = if self.no_animation {
                     "none".to_string()
@@ -1109,7 +1119,10 @@ impl ExportTab {
                         self.activate_clip(i - 1, Some(jobs));
                     }
                 }
-                ui.label(RichText::new("Face animation").strong());
+            }
+            ui.add_space(16.0);
+            widgets::h3(ui, "Face animation");
+            if self.loaded.is_some() {
                 let tiles = self.clip_tiles("No face animation", catalog, thumbs);
                 let selected = self
                     .face_selected
@@ -1118,26 +1131,39 @@ impl ExportTab {
                 if let Some(i) = widgets::strip(ui, "face-animation", &tiles, Some(&selected), active) {
                     self.choose_face(i.checked_sub(1), jobs);
                 }
-                self.face_ui(ui);
-                ui.separator();
-                self.pose_ui(ui);
-                ui.separator();
-                ui.label(RichText::new("Formats").strong());
-                ui.horizontal(|ui| {
-                    let f = &mut settings.formats;
-                    ui.checkbox(&mut f.glb, "GLB");
-                    ui.checkbox(&mut f.obj, "OBJ");
-                    ui.checkbox(&mut f.dae, "DAE");
-                    ui.checkbox(&mut f.smd, "SMD");
-                });
-                widgets::path_row(
-                    ui,
-                    "Output directory",
-                    &mut settings.output,
-                    Pick::Folder,
-                    "Choose an output folder",
-                );
+            } else {
+                ui.add_space(96.0);
+            }
+            self.face_ui(ui);
+            ui.add_space(18.0);
+            let w = ui.available_width();
+            let (rule, _) = ui.allocate_exact_size(egui::vec2(w, 1.0), egui::Sense::hover());
+            ui.painter().rect_filled(rule, 0.0, c::LINE);
+            ui.add_space(12.0);
+            self.pose_ui(ui);
+            ui.add_space(18.0);
+            widgets::text(ui, "Formats", 12.0, W::Regular, c::TEXT);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let f = &mut settings.formats;
+                for (value, label) in [
+                    (&mut f.glb, "GLB"),
+                    (&mut f.obj, "OBJ"),
+                    (&mut f.dae, "DAE"),
+                    (&mut f.smd, "SMD"),
+                ] {
+                    widgets::checkbox(ui, value, label, 12.0, true);
+                    ui.add_space(15.0);
+                }
             });
+            ui.add_space(10.0 + 18.0 + 12.0);
+            widgets::path_row(
+                ui,
+                "Output directory",
+                &mut settings.output,
+                Pick::Folder,
+                "Choose an output folder",
+            );
         });
     }
 
@@ -1153,7 +1179,7 @@ impl ExportTab {
                 && !cancelling
                 && !self.exporting
                 && (running || self.lane_busy.is_none());
-            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            if widgets::button(ui, label, Kind::Short, enabled).clicked() {
                 if let Some(run) = &self.load_all {
                     run.cancel.store(true, Ordering::Relaxed);
                 } else {
@@ -1168,8 +1194,10 @@ impl ExportTab {
                 }
             }
         }
+        ui.add_space(12.0);
         if !self.load_all_label.is_empty() {
-            ui.label(RichText::new(&self.load_all_label).weak());
+            widgets::muted(ui, &self.load_all_label);
+            ui.add_space(12.0);
         }
         if let Some(run) = &self.load_all {
             let fraction = if run.total == 0 {
@@ -1177,122 +1205,132 @@ impl ExportTab {
             } else {
                 run.done as f32 / run.total as f32
             };
-            ui.add(egui::ProgressBar::new(fraction).desired_height(8.0));
+            widgets::progress(ui, fraction);
+            ui.add_space(10.0);
         }
+    }
+
+    /// `.transport`: a button at the left and a 12px label pushed to the right.
+    fn transport_row(ui: &mut egui::Ui, button: &str, enabled: bool, label: &str) -> bool {
+        let mut clicked = false;
+        ui.horizontal(|ui| {
+            clicked = widgets::button(ui, button, Kind::Short, enabled).clicked();
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                widgets::text(ui, label, 12.0, W::Regular, c::TEXT);
+            });
+        });
+        clicked
     }
 
     fn transport_ui(&mut self, ui: &mut egui::Ui) {
         let usable = self.clip.is_some() && !self.no_animation && !self.free_pose && self.loaded.is_some();
-        ui.horizontal(|ui| {
-            let label = if self.playing { "Pause" } else { "Play" };
-            if ui.add_enabled(usable, egui::Button::new(label)).clicked() {
-                if self.playing {
-                    self.pause();
-                } else {
-                    self.playing = true;
-                    self.playhead = f64::from(self.frame) / self.clip_fps();
-                }
+        let label = if self.playing { "Pause" } else { "Play" };
+        if Self::transport_row(ui, label, usable, &format!("Frame {}", self.frame)) {
+            if self.playing {
+                self.pause();
+            } else {
+                self.playing = true;
+                self.playhead = f64::from(self.frame) / self.clip_fps();
             }
-            ui.label(format!("Frame {}", self.frame));
-        });
+        }
+        ui.add_space(17.0);
         let mut frame = self.frame;
         let max = self.clip_frames().saturating_sub(1);
-        let slider = ui.add_enabled(usable, egui::Slider::new(&mut frame, 0..=max).show_value(false));
-        if slider.changed() {
+        if widgets::slider(ui, &mut frame, max, usable).changed() {
             self.seek(frame);
         }
+        ui.add_space(16.0);
         let clip_name = match (
             self.no_animation,
             self.clip.and_then(|c| self.loaded.as_ref()?.clips.get(c)),
         ) {
-            (false, Some(c)) => format!("{} · {:.0} fps", c.name, c.fps),
+            (false, Some(c)) => format!("{} \u{b7} {:.0} fps", c.name, c.fps),
+            _ if self.loaded.is_none() => "No animation loaded".into(),
             _ => "No animation".into(),
         };
-        ui.label(RichText::new(clip_name).weak());
+        widgets::muted(ui, clip_name);
     }
 
     fn face_ui(&mut self, ui: &mut egui::Ui) {
         let has = self.face.is_some();
-        ui.horizontal(|ui| {
-            let label = if self.face.as_ref().is_some_and(|f| f.playing) {
-                "Pause face"
-            } else {
-                "Play face"
-            };
-            if ui.add_enabled(has, egui::Button::new(label)).clicked() {
-                if let Some(face) = self.face.as_mut() {
-                    face.playing = !face.playing;
-                }
+        let label = if self.face.as_ref().is_some_and(|f| f.playing) {
+            "Pause face"
+        } else {
+            "Play face"
+        };
+        ui.add_space(8.0);
+        let status = self.face_status.clone();
+        if Self::transport_row(ui, label, has, &status) {
+            if let Some(face) = self.face.as_mut() {
+                face.playing = !face.playing;
             }
-            ui.label(&self.face_status);
-        });
+        }
+        ui.add_space(8.0 + 12.0);
         let (mut frame, max) = self
             .face
             .as_ref()
             .map_or((0, 0), |f| (f.frame, f.face.animation.frames.saturating_sub(1)));
-        if ui
-            .add_enabled(has, egui::Slider::new(&mut frame, 0..=max).show_value(false))
-            .changed()
-        {
+        if widgets::slider(ui, &mut frame, max, has).changed() {
             if let Some(face) = self.face.as_mut() {
                 face.playing = false;
             }
             self.seek_face(frame);
         }
+        ui.add_space(12.0);
     }
 
     fn pose_ui(&mut self, ui: &mut egui::Ui) {
         let mut enabled = self.free_pose;
-        if ui
-            .add_enabled(
-                self.viewport.viewer.is_some() && self.lane_busy.is_none(),
-                egui::Checkbox::new(&mut enabled, "Free pose"),
-            )
-            .changed()
-        {
+        let usable = self.viewport.viewer.is_some() && self.lane_busy.is_none();
+        if widgets::checkbox(ui, &mut enabled, "Free pose", 14.0, usable).changed() {
             self.set_free_pose(enabled);
         }
+        ui.add_space(10.0);
         if !self.free_pose {
             return;
         }
-        ui.label(
-            RichText::new("Rotate the head, torso, arms or legs. Select Whole avatar to move the character.")
-                .weak(),
+        ui.add_space(2.0);
+        widgets::muted(
+            ui,
+            "Rotate the head, torso, arms or legs. Select Whole avatar to move the character.",
         );
+        ui.add_space(12.0);
         let current = self
             .bone
             .and_then(|b| self.joint_names.get(b))
             .and_then(|n| JOINTS.iter().find(|(j, _)| j == n))
-            .map_or("Choose a bone", |(_, label)| label);
-        egui::ComboBox::from_label("Bone")
-            .selected_text(current)
-            .show_ui(ui, |ui| {
-                for (name, label) in JOINTS {
-                    if let Some(index) = self.joint_index(name) {
-                        if ui.selectable_label(self.bone == Some(index), label).clicked() {
-                            self.bone = Some(index);
-                            if name != "BASE" {
-                                self.move_mode = false;
-                            }
-                        }
-                    }
-                }
-            });
+            .map_or("", |(_, label)| label);
+        widgets::field_label(ui, "Bone");
+        ui.add_space(5.0);
+        let available: Vec<(usize, &str, &str)> = JOINTS
+            .iter()
+            .filter_map(|(name, label)| self.joint_index(name).map(|i| (i, *name, *label)))
+            .collect();
+        let options: Vec<String> = available.iter().map(|(_, _, l)| (*l).to_string()).collect();
+        let w = ui.available_width();
+        if let Some(k) = widgets::select(ui, "bone-select", current, &options, w) {
+            let (index, name, _) = available[k];
+            self.bone = Some(index);
+            if name != "BASE" {
+                self.move_mode = false;
+            }
+        }
         let Some(joint) = self.bone else {
             return;
         };
         let is_base = self.joint_names.get(joint).is_some_and(|n| n == "BASE");
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.selectable_label(!self.move_mode, "Rotate").clicked() {
+            if widgets::button(ui, "Rotate", Kind::Short, true).clicked() {
                 self.move_mode = false;
             }
-            if ui
-                .add_enabled(is_base, egui::Button::selectable(self.move_mode, "Move"))
-                .clicked()
-            {
-                self.move_mode = true;
-            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if widgets::button(ui, "Move", Kind::Short, is_base).clicked() {
+                    self.move_mode = true;
+                }
+            });
         });
+        ui.add_space(8.0);
         let local = self
             .viewport
             .viewer
@@ -1307,67 +1345,84 @@ impl ExportTab {
             [x.to_degrees(), y.to_degrees(), z.to_degrees()]
         };
         let mut changed = false;
+        let col = (ui.available_width() - 16.0) / 3.0;
+        let move_mode = self.move_mode;
         ui.horizontal(|ui| {
-            for (axis, value) in ["X", "Y", "Z"].iter().zip(values.iter_mut()) {
-                ui.label(*axis);
-                let drag = if self.move_mode {
-                    egui::DragValue::new(value).speed(0.005).fixed_decimals(4)
-                } else {
-                    egui::DragValue::new(value).speed(0.5).fixed_decimals(2)
-                };
-                changed |= ui.add(drag).changed();
+            for (i, (axis, value)) in ["X", "Y", "Z"].iter().zip(values.iter_mut()).enumerate() {
+                if i > 0 {
+                    ui.add_space(8.0);
+                }
+                ui.vertical(|ui| {
+                    ui.set_width(col);
+                    widgets::field_label(ui, axis);
+                    ui.add_space(5.0);
+                    ui.scope(|ui| {
+                        widgets::input_style(ui);
+                        let drag = if move_mode {
+                            egui::DragValue::new(value).speed(0.005).fixed_decimals(4)
+                        } else {
+                            egui::DragValue::new(value).speed(0.5).fixed_decimals(2)
+                        };
+                        changed |= ui.add_sized([col, widgets::INPUT_H], drag).changed();
+                    });
+                });
             }
         });
         if changed {
             self.edit_bone(joint, values);
         }
-        ui.label(
-            RichText::new(if self.move_mode {
+        ui.add_space(12.0);
+        widgets::muted(
+            ui,
+            if self.move_mode {
                 "Local position in metres"
             } else {
                 "Local rotation in degrees"
-            })
-            .weak(),
+            },
         );
+        ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if ui.button("Reset bone").clicked() {
+            if widgets::button(ui, "Reset bone", Kind::Short, true).clicked() {
                 self.reset_bones(Some(joint));
             }
-            if ui.button("Reset pose").clicked() {
-                self.reset_bones(None);
-            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if widgets::button(ui, "Reset pose", Kind::Short, true).clicked() {
+                    self.reset_bones(None);
+                }
+            });
         });
+        ui.add_space(8.0);
     }
 
     pub fn footer(&mut self, ui: &mut egui::Ui, jobs: &Jobs, settings: &Settings, catalog: &Catalog) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(&self.status).weak());
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let export = egui::Button::new(RichText::new("Export").strong())
-                    .fill(widgets::ACCENT.gamma_multiply(0.25));
-                let can_export =
-                    self.loaded.is_some() && !self.exporting && !self.loading && self.lane_busy.is_none();
-                if ui.add_enabled(can_export, export).clicked() {
-                    self.export(jobs, settings);
-                }
-                if ui
-                    .add_enabled(
-                        !self.loading && !self.exporting,
-                        egui::Button::new("Reload avatar"),
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let can_export =
+                self.loaded.is_some() && !self.exporting && !self.loading && self.lane_busy.is_none();
+            if widgets::button(ui, "Export", Kind::Primary, can_export).clicked() {
+                self.export(jobs, settings);
+            }
+            ui.add_space(10.0);
+            if widgets::button(ui, "Reload avatar", Kind::Short, !self.loading && !self.exporting).clicked() {
+                self.load(jobs, settings, catalog);
+            }
+            ui.add_space(10.0);
+            if widgets::button(ui, "Activity log", Kind::Short, true).clicked() {
+                self.log_dialog.open();
+            }
+            ui.add_space(10.0);
+            if widgets::button(ui, "Avatar source", Kind::Short, true).clicked() {
+                self.source_open = true;
+            }
+            ui.add_space(12.0);
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&self.status)
+                            .font(widgets::font(11.0, W::Regular))
+                            .color(c::MUTED),
                     )
-                    .clicked()
-                {
-                    self.load(jobs, settings, catalog);
-                }
-                if ui.button("Activity log").clicked() {
-                    self.log_open = true;
-                }
-                if ui.button("Avatar source").clicked() {
-                    self.source_open = true;
-                }
-                if self.loading || self.exporting || self.lane_busy.is_some() {
-                    ui.spinner();
-                }
+                    .truncate(),
+                );
             });
         });
     }

@@ -6,12 +6,14 @@ use std::sync::Arc;
 
 use avatar_export::scene::Scene;
 use avatar_view::Viewer;
-use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, Rect, Sense, Stroke, Vec2};
+
+use crate::widgets::{self, Paint};
 use eframe::egui_wgpu;
 use eframe::wgpu;
 
 /// Colour format of every viewer target.
-pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Device and queue a worker needs to build a viewer off the UI thread.
 #[derive(Clone)]
@@ -121,10 +123,10 @@ impl Viewport {
     pub fn show(&mut self, ui: &mut egui::Ui, rect: Rect, markers: &[Marker]) -> ViewportResponse {
         let id = ui.id().with("viewport");
         let response = ui.interact(rect, id, Sense::click_and_drag());
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 6.0, Color32::from_rgb(0xF4, 0xF6, 0xF1));
+        let painter = ui.painter_at(rect.expand(1.0));
         let mut out = ViewportResponse::default();
         let Some(viewer) = self.viewer.as_mut() else {
+            stage_frame(&painter, rect, None);
             return out;
         };
         let height = rect.height().max(1.0);
@@ -165,12 +167,7 @@ impl Viewport {
             });
         viewer.render(&mut encoder, &view, size[0], size[1]);
         gpu.queue.submit([encoder.finish()]);
-        painter.image(
-            tex,
-            rect,
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-            Color32::WHITE,
-        );
+        stage_frame(&painter, rect, Some(tex));
 
         if !markers.is_empty() {
             let positions = viewer.bone_screen_positions();
@@ -210,6 +207,28 @@ impl Viewport {
         }
         out
     }
+}
+
+/// `.viewport`: radial #fff to #e0e8d9 stage (or the rendered frame) inside a 1px #cbd9be border, 10px radius.
+fn stage_frame(painter: &egui::Painter, rect: Rect, frame: Option<egui::TextureId>) {
+    match frame {
+        Some(tex) => widgets::image_rounded(painter, rect, 10.0, tex),
+        None => widgets::fill(
+            painter,
+            rect,
+            10.0,
+            &Paint::Radial(
+                Vec2::new(0.5, 0.35),
+                &[(0.0, Color32::WHITE), (1.0, widgets::rgb(0xE0E8D9))],
+            ),
+        ),
+    }
+    painter.rect_stroke(
+        rect,
+        10.0,
+        Stroke::new(1.0, widgets::rgb(0xCBD9BE)),
+        egui::StrokeKind::Inside,
+    );
 }
 
 impl Drop for Viewport {

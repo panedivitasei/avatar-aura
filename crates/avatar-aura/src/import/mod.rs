@@ -7,16 +7,14 @@ pub mod validate;
 
 use std::path::{Path, PathBuf};
 
-use validate::{bodies_label, category_names, ItemResult, PackageError};
+use validate::{bodies_label, ItemResult, PackageError};
 
 /// What the item list shows per validated item.
 #[derive(Clone, Debug)]
 pub struct ItemSummary {
     pub guid: String,
     pub name: String,
-    pub categories: String,
     pub bodies: &'static str,
-    pub award: bool,
     pub icon: Option<Vec<u8>>,
 }
 
@@ -26,9 +24,7 @@ pub fn describe(results: &[ItemResult]) -> Vec<ItemSummary> {
         .map(|r| ItemSummary {
             guid: r.guid.clone(),
             name: r.name.clone(),
-            categories: category_names(r.categories),
             bodies: bodies_label(r.bodies),
-            award: r.is_award,
             icon: r.icon_bytes.clone(),
         })
         .collect()
