@@ -39,11 +39,15 @@ pub fn userdata() -> PathBuf {
     if let Some(configured) = std::env::var_os("AVATAR_AURA_USERDATA") {
         return expand(&configured.to_string_lossy());
     }
-    let profile = workspace().join("userdata");
-    [exe_dir().join("userdata"), profile.clone()]
-        .into_iter()
-        .find(|c| c.is_dir())
-        .unwrap_or(profile)
+    let shared = jmstudios_dir().join("userdata");
+    [
+        exe_dir().join("userdata"),
+        shared.clone(),
+        workspace().join("userdata"),
+    ]
+    .into_iter()
+    .find(|c| c.is_dir())
+    .unwrap_or(shared)
 }
 
 fn asset_roots() -> Vec<PathBuf> {
@@ -55,13 +59,25 @@ fn asset_roots() -> Vec<PathBuf> {
     ]
 }
 
+/// `Documents/JMstudios`, the user-data tree every JMstudios recomp reads.
+pub fn jmstudios_dir() -> PathBuf {
+    home_dir().unwrap_or_default().join("Documents").join("JMstudios")
+}
+
+/// `Documents/JMstudios/userdata/avatar`, where the Avatar Editor recomp keeps the saved avatar.
+pub fn shared_avatar_dir() -> PathBuf {
+    jmstudios_dir().join("userdata").join("avatar")
+}
+
 pub fn default_manifest() -> String {
-    let path = userdata().join("avatars").join("avatar_manifest.bin");
-    if path.is_file() {
-        path.display().to_string()
-    } else {
-        String::new()
-    }
+    [
+        shared_avatar_dir().join("avatar_manifest.bin"),
+        userdata().join("avatars").join("avatar_manifest.bin"),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
+    .map(|p| p.display().to_string())
+    .unwrap_or_default()
 }
 
 pub fn default_pack() -> String {
