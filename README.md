@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/logo.png" alt="avatar aura" width="640"></p>
 
-Desktop tool for Xbox 360 avatars: import avatar items into the Avatar Editor recomp, or pose and animate your avatar, and export it as a 3D model.
+Desktop tool for Xbox 360 avatars for use with [AvatarEditorRecomp](https://github.com/panedivitasei/AvatarEditorRecomp): import avatar items into the Avatar Editor. Pose and animate your avatar, then export it as a 3D model.
 
 **Export**
 - Load your saved avatar and preview it with materials and animations.
