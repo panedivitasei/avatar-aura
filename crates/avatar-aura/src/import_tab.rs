@@ -52,7 +52,7 @@ impl ImportTab {
             items: Vec::new(),
             icons: Vec::new(),
             selected: None,
-            summary: "Choose items to see validation results.".into(),
+            summary: "Load items to see validation results.".into(),
             status: String::new(),
             log: Vec::new(),
             log_dialog: widgets::LogDialog::default(),
@@ -406,7 +406,7 @@ impl ImportTab {
             painter.text(
                 egui::pos2(view.center().x, y),
                 egui::Align2::CENTER_TOP,
-                "Preview items on a mannequin",
+                "Preview items",
                 widgets::font(15.0, W::Semibold),
                 c::STAGE_TEXT,
             );
@@ -448,7 +448,7 @@ impl ImportTab {
             let mut choose = false;
             ui.vertical_centered(|ui| {
                 ui.add_space(15.0);
-                widgets::text(ui, "Choose items to import", 15.0, W::Semibold, c::TEXT);
+                widgets::text(ui, "Load items to import", 15.0, W::Semibold, c::TEXT);
                 ui.add_space(10.0);
                 widgets::text(
                     ui,
@@ -458,7 +458,7 @@ impl ImportTab {
                     c::TEXT,
                 );
                 ui.add_space(12.0);
-                choose = widgets::button(ui, "Choose items", Kind::Short, !self.busy).clicked();
+                choose = widgets::button(ui, "Browse files", Kind::Short, !self.busy).clicked();
                 ui.add_space(15.0);
             });
             let target = Rect::from_min_max(top, egui::pos2(top.x + w, ui.cursor().min.y));
