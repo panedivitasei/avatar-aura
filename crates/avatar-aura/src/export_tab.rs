@@ -13,16 +13,24 @@ use glam::{Mat4, Vec3};
 
 use crate::bake::Inputs;
 use crate::catalog::{self, Catalog};
-use crate::jobs::{Jobs, LaneOutput, LaneTask, LoadAllResultParts, Msg, Rebuilt};
+use crate::jobs::{rgba_to_color, Jobs, LaneOutput, LaneTask, LoadAllResultParts, Msg, Rebuilt, TileOutcome};
 use crate::paths;
 use crate::session::{self, ExpressionTextures, Loaded, PreparedFace, TextureCache};
 use crate::settings::Settings;
+use crate::tiles;
 use crate::viewport::Viewport;
 use crate::widgets::{self, c, Kind, Pick, Tile, W};
 
 const CHANNELS: [&str; 3] = ["mouth", "eyes", "brows"];
 
 struct LoadAllRun {
+    cancel: Arc<AtomicBool>,
+    done: usize,
+    total: usize,
+}
+
+/// The tile render that follows a complete Load All.
+struct TileRun {
     cancel: Arc<AtomicBool>,
     done: usize,
     total: usize,
@@ -51,6 +59,7 @@ pub struct ExportTab {
     lane_busy: Option<LaneTask>,
     lane_queue: VecDeque<LaneTask>,
     load_all: Option<LoadAllRun>,
+    tiles: Option<TileRun>,
     load_all_label: String,
     load_all_hidden: bool,
     clip: Option<usize>,
@@ -99,6 +108,7 @@ impl ExportTab {
             lane_busy: None,
             lane_queue: VecDeque::new(),
             load_all: None,
+            tiles: None,
             load_all_label: String::new(),
             load_all_hidden: false,
             clip: None,
@@ -131,6 +141,11 @@ impl ExportTab {
 
     pub fn note_line(&mut self, line: String) {
         self.note(line);
+    }
+
+    /// Counter that changes whenever a different avatar is shown; tile overrides belong to one value.
+    pub fn session(&self) -> u64 {
+        self.session
     }
 
     fn fail(&mut self, message: impl Into<String>) {
@@ -172,6 +187,9 @@ impl ExportTab {
         self.lane_queue.clear();
         self.lane_busy = None;
         if let Some(run) = self.load_all.take() {
+            run.cancel.store(true, Ordering::Relaxed);
+        }
+        if let Some(run) = self.tiles.take() {
             run.cancel.store(true, Ordering::Relaxed);
         }
         self.load_all_label.clear();
@@ -326,7 +344,7 @@ impl ExportTab {
         }
     }
 
-    fn on_lane(&mut self, task: LaneTask, result: Result<LaneOutput, String>) {
+    fn on_lane(&mut self, task: LaneTask, result: Result<LaneOutput, String>, jobs: &Jobs) {
         self.lane_busy = None;
         match (task, result) {
             (_, Ok(LaneOutput::Clip(rebuilt))) => {
@@ -362,6 +380,9 @@ impl ExportTab {
                     self.load_all_hidden = true;
                 }
                 self.note(self.load_all_label.clone());
+                if result.done >= result.total {
+                    self.start_tiles(jobs);
+                }
             }
             (_, Ok(_)) => {}
             (task, Err(e)) => {
@@ -402,7 +423,7 @@ impl ExportTab {
                 result,
             } => {
                 if session == self.session {
-                    self.on_lane(task, result);
+                    self.on_lane(task, result, jobs);
                 }
                 self.pump(jobs);
             }
@@ -420,6 +441,23 @@ impl ExportTab {
                     if !label.is_empty() {
                         self.load_all_label = label;
                     }
+                }
+            }
+            Msg::TileProgress { session, done, total } => {
+                if session == self.session {
+                    if let Some(run) = self.tiles.as_mut() {
+                        run.done = done;
+                        run.total = total;
+                        if !run.cancel.load(Ordering::Relaxed) {
+                            self.load_all_label = format!("Rendering tiles {done} / {total}");
+                        }
+                    }
+                }
+            }
+            Msg::TilesDone { session, result } => {
+                if session == self.session && self.tiles.is_some() {
+                    self.tiles = None;
+                    self.on_tiles(result);
                 }
             }
             Msg::Expression {
@@ -472,6 +510,86 @@ impl ExportTab {
                 }
             }
             _ => {}
+        }
+    }
+
+    // ---- strip tiles ----
+
+    /// Renders the strip tiles from the current avatar on a worker; every message carries the session so a newer
+    /// avatar drops them.
+    fn start_tiles(&mut self, jobs: &Jobs) {
+        let Some(loaded) = self.loaded.clone() else {
+            return;
+        };
+        let total = tiles::total(&loaded);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.tiles = Some(TileRun {
+            cancel: cancel.clone(),
+            done: 0,
+            total,
+        });
+        self.load_all_hidden = false;
+        self.load_all_label = format!("Rendering tiles 0 / {total}");
+        let session = self.session;
+        let gpu = self.viewport.gpu();
+        let textures = self.textures.clone();
+        jobs.spawn("tiles", move |reply| {
+            let started = std::time::Instant::now();
+            let send = |images: Vec<tiles::Tile>| {
+                let images = images
+                    .into_iter()
+                    .map(|(name, img)| (name, rgba_to_color(&img)))
+                    .collect();
+                reply.send(Msg::Tiles { session, images });
+            };
+            let outcome = |done| TileOutcome {
+                done,
+                total,
+                seconds: started.elapsed().as_secs_f64(),
+            };
+            let result = (|| -> anyhow::Result<TileOutcome> {
+                let faces = tiles::expression_tiles(&loaded, &gpu, &textures, &cancel, &mut |done| {
+                    reply.send(Msg::TileProgress { session, done, total });
+                })?;
+                let Some(faces) = faces else {
+                    return Ok(outcome(0));
+                };
+                let done = faces.len();
+                send(faces);
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(outcome(done));
+                }
+                let scratch = tiles::scratch_dir(session);
+                let clips = tiles::clip_tiles(&loaded, &scratch);
+                // A leftover folder only costs disk space under the cache.
+                let _ = std::fs::remove_dir_all(&scratch);
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(outcome(done));
+                }
+                send(clips?);
+                Ok(outcome(total))
+            })()
+            .map_err(|e| format!("{e:#}"));
+            reply.send(Msg::TilesDone { session, result });
+        });
+    }
+
+    fn on_tiles(&mut self, result: Result<TileOutcome, String>) {
+        let clips = self.loaded.as_ref().map_or(0, |l| l.clips.len());
+        match result {
+            Ok(o) if o.done >= o.total => {
+                self.note(format!("Rendered {} tiles in {:.1}s", o.total, o.seconds));
+                self.load_all_label = format!("All {clips} animations and face animations loaded.");
+                self.load_all_hidden = true;
+            }
+            Ok(o) => {
+                self.load_all_label = format!("Tiles stopped · {} / {} rendered", o.done, o.total);
+                self.note(self.load_all_label.clone());
+            }
+            Err(e) => {
+                self.load_all_label = format!("Tiles failed. {e}");
+                self.note(self.load_all_label.clone());
+            }
         }
     }
 
@@ -1099,12 +1217,14 @@ impl ExportTab {
 
     fn load_all_ui(&mut self, ui: &mut egui::Ui, jobs: &Jobs) {
         if !self.load_all_hidden {
-            let running = self.load_all.is_some();
+            let running = self.load_all.is_some() || self.tiles.is_some();
             let label = if running { "Cancel" } else { "Load All" };
             let cancelling = self
                 .load_all
                 .as_ref()
-                .is_some_and(|r| r.cancel.load(Ordering::Relaxed));
+                .map(|r| &r.cancel)
+                .or(self.tiles.as_ref().map(|r| &r.cancel))
+                .is_some_and(|c| c.load(Ordering::Relaxed));
             let enabled = self.loaded.is_some()
                 && !cancelling
                 && !self.exporting
@@ -1112,6 +1232,9 @@ impl ExportTab {
             if widgets::button(ui, label, Kind::Short, enabled).clicked() {
                 if let Some(run) = &self.load_all {
                     run.cancel.store(true, Ordering::Relaxed);
+                } else if let Some(run) = &self.tiles {
+                    run.cancel.store(true, Ordering::Relaxed);
+                    self.load_all_label = "Stopping the tile render...".into();
                 } else {
                     let total = self.loaded.as_ref().map_or(0, |l| l.clips.len() * 2);
                     self.load_all = Some(LoadAllRun {
@@ -1129,11 +1252,16 @@ impl ExportTab {
             widgets::muted(ui, &self.load_all_label);
             ui.add_space(12.0);
         }
-        if let Some(run) = &self.load_all {
-            let fraction = if run.total == 0 {
+        let counters = self
+            .load_all
+            .as_ref()
+            .map(|r| (r.done, r.total))
+            .or(self.tiles.as_ref().map(|r| (r.done, r.total)));
+        if let Some((done, total)) = counters {
+            let fraction = if total == 0 {
                 0.0
             } else {
-                run.done as f32 / run.total as f32
+                done as f32 / total as f32
             };
             widgets::progress(ui, fraction);
             ui.add_space(10.0);

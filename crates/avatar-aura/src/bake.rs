@@ -66,6 +66,10 @@ pub struct Request {
     pub anims: Vec<PathBuf>,
     pub anim_dir: PathBuf,
     pub preview_dir: PathBuf,
+    /// Preview edge in pixels; 384 when unset.
+    pub preview_size: Option<i32>,
+    /// `--preview-frame` rule; `mid` when unset.
+    pub preview_frame: Option<String>,
 }
 
 impl Request {
@@ -84,7 +88,10 @@ impl Request {
         a.anim_dir = self.anim_dir.clone();
         a.preview_dir = self.preview_dir.clone();
         if !a.preview_dir.as_os_str().is_empty() {
-            a.preview_size = 384;
+            a.preview_size = self.preview_size.unwrap_or(384).max(64);
+        }
+        if let Some(rule) = &self.preview_frame {
+            a.preview_frame.clone_from(rule);
         }
         a
     }

@@ -224,7 +224,7 @@ pub fn load(
     })
 }
 
-fn query_for(clips: &[&ClipEntry]) -> ClipQuery {
+pub(crate) fn query_for(clips: &[&ClipEntry]) -> ClipQuery {
     let mut query = ClipQuery::default();
     for clip in clips {
         match &clip.source {
@@ -382,6 +382,26 @@ pub fn mix_expression(
 ) -> anyhow::Result<ExpressionTextures> {
     let entry = faces::mixed_catalog_entry(&loaded.avatar, expression)?;
     resolve_entry(loaded, &entry.textures, cache)
+}
+
+/// Head textures of one catalog expression: its composites, else the channel frame mixed over neutral.
+pub fn catalog_textures(
+    loaded: &Loaded,
+    entry: &CatalogExpression,
+    cache: &TextureCache,
+) -> anyhow::Result<ExpressionTextures> {
+    if !entry.textures.is_empty() {
+        return resolve_entry(loaded, &entry.textures, cache);
+    }
+    let mut channels = [None; 3];
+    if let Some((channel, frame)) = entry.id.split_once(':') {
+        let slot = ["mouth", "eyes", "brows"].iter().position(|c| *c == channel);
+        if let (Some(slot), Ok(frame)) = (slot, frame.parse()) {
+            channels[slot] = Some(frame);
+        }
+    }
+    let [m, e, b] = channels;
+    mix_expression(loaded, &selection(m, e, b), cache)
 }
 
 /// A face animation with every entry's textures decoded for playback.

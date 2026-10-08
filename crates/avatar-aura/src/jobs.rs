@@ -65,6 +65,13 @@ impl LoadAllResultParts {
     }
 }
 
+/// How a tile run ended; `done` falls short of `total` when cancelled.
+pub struct TileOutcome {
+    pub done: usize,
+    pub total: usize,
+    pub seconds: f64,
+}
+
 pub enum Msg {
     Thumbs(Vec<(String, egui::ColorImage)>),
     ImportAnalyzed {
@@ -96,6 +103,20 @@ pub enum Msg {
         done: usize,
         total: usize,
         label: String,
+    },
+    /// Strip tiles rendered from the session's avatar, replacing the bundled ones under the same keys.
+    Tiles {
+        session: u64,
+        images: Vec<(String, egui::ColorImage)>,
+    },
+    TileProgress {
+        session: u64,
+        done: usize,
+        total: usize,
+    },
+    TilesDone {
+        session: u64,
+        result: Result<TileOutcome, String>,
     },
     Expression {
         session: u64,

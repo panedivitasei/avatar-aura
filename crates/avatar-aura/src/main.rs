@@ -16,6 +16,7 @@ mod paths;
 mod session;
 mod settings;
 mod smoke;
+mod tiles;
 mod viewport;
 mod widgets;
 
