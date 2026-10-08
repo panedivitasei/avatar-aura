@@ -100,7 +100,7 @@ impl ExportTab {
             log: Vec::new(),
             log_dialog: widgets::LogDialog::default(),
             source_open: false,
-            status: "The moment on screen becomes the file.".into(),
+            status: String::new(),
             loaded: None,
             session: 0,
             load_generation: 0,
@@ -1040,16 +1040,8 @@ impl ExportTab {
         let painter = ui.painter().clone();
         if self.viewport.viewer.is_none() {
             let button_h = widgets::line(13.0) + 16.0;
-            let total = widgets::line(15.0) + 10.0 + 12.0 + widgets::line(12.0) + 12.0 + button_h;
+            let total = widgets::line(12.0) + 12.0 + button_h;
             let mut y = rect.center().y - total / 2.0;
-            painter.text(
-                egui::pos2(rect.center().x, y),
-                egui::Align2::CENTER_TOP,
-                "Your avatar takes the stage here",
-                widgets::font(15.0, W::Semibold),
-                c::STAGE_TEXT,
-            );
-            y += widgets::line(15.0) + 10.0 + 12.0;
             painter.text(
                 egui::pos2(rect.center().x, y),
                 egui::Align2::CENTER_TOP,

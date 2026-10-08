@@ -429,7 +429,7 @@ impl eframe::App for AuraApp {
             ),
             Tab::Export => (
                 "Export your avatar as a 3D model",
-                "Choose an animation frame and expression, then export to DAE, GLB, OBJ or SMD.",
+                "Pose your avatar with your favorite animation and export to your format of choice.",
             ),
         };
         widgets::in_rect(ui, heading, |ui| widgets::section_heading(ui, title, blurb));
