@@ -398,7 +398,7 @@ impl ImportTab {
             full.min,
             egui::pos2(full.max.x, (full.max.y - strip_h - 10.0).max(full.min.y + 80.0)),
         );
-        self.viewport.show(ui, view, &[]);
+        self.viewport.show(ui, view);
         let painter = ui.painter().clone();
         if self.viewport.viewer.is_none() {
             let total = widgets::line(15.0) + 10.0 + 12.0 + widgets::line(12.0);

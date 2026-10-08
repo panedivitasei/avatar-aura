@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use avatar_export::export::{Formats, PoseSource};
 use avatar_export::faces::Expression;
+use avatar_view::GizmoMode;
 use eframe::egui::{self, Align, Layout, Rect, RichText};
-use glam::{EulerRot, Mat4, Quat, Vec3};
+use glam::{Mat4, Vec3};
 
 use crate::bake::Inputs;
 use crate::catalog::{self, Catalog};
@@ -16,28 +17,8 @@ use crate::jobs::{Jobs, LaneOutput, LaneTask, LoadAllResultParts, Msg, Rebuilt};
 use crate::paths;
 use crate::session::{self, ExpressionTextures, Loaded, PreparedFace, TextureCache};
 use crate::settings::Settings;
-use crate::viewport::{Marker, Viewport};
+use crate::viewport::Viewport;
 use crate::widgets::{self, c, Kind, Pick, Tile, W};
-
-/// Editable joints and their labels, from bones.js.
-const JOINTS: [(&str, &str); 16] = [
-    ("BASE", "Whole avatar"),
-    ("BACKB", "Torso"),
-    ("NECK", "Neck"),
-    ("HEAD", "Head"),
-    ("LF_S", "Left shoulder"),
-    ("LF_E", "Left elbow"),
-    ("LF_W", "Left wrist"),
-    ("RT_S", "Right shoulder"),
-    ("RT_E", "Right elbow"),
-    ("RT_W", "Right wrist"),
-    ("LF_H", "Left hip"),
-    ("LF_K", "Left knee"),
-    ("LF_A", "Left ankle"),
-    ("RT_H", "Right hip"),
-    ("RT_K", "Right knee"),
-    ("RT_A", "Right ankle"),
-];
 
 const CHANNELS: [&str; 3] = ["mouth", "eyes", "brows"];
 
@@ -88,8 +69,7 @@ pub struct ExportTab {
     face_request: u64,
     face_status: String,
     free_pose: bool,
-    bone: Option<usize>,
-    move_mode: bool,
+    /// Pose captured when free pose turned on, the gizmo's reset target, carried across viewer rebuilds.
     original: Vec<Mat4>,
     joint_names: Vec<String>,
 }
@@ -137,8 +117,6 @@ impl ExportTab {
             face_request: 0,
             face_status: "No face animation".into(),
             free_pose: false,
-            bone: None,
-            move_mode: false,
             original: Vec::new(),
             joint_names: Vec::new(),
         }
@@ -206,7 +184,6 @@ impl ExportTab {
         self.applied = None;
         self.overridden.clear();
         self.free_pose = false;
-        self.bone = None;
         self.joint_names = rebuilt
             .viewer
             .joint_names()
@@ -214,6 +191,7 @@ impl ExportTab {
             .map(|s| s.to_string())
             .collect();
         self.viewport.replace(rebuilt.viewer, false);
+        self.set_free_pose(false);
         let clips = rebuilt.loaded.clips.len();
         let stand = rebuilt
             .loaded
@@ -315,10 +293,27 @@ impl ExportTab {
 
     /// Swaps in a rebuilt viewer with the same camera, pose and head textures.
     fn adopt(&mut self, rebuilt: Rebuilt) {
-        let locals = self.viewport.viewer.as_ref().map(|v| v.joint_locals());
+        let old = self.viewport.viewer.as_ref().map(|v| {
+            let gizmo = v.gizmo();
+            (v.joint_locals(), v.pose_edits(), gizmo.selected(), gizmo.mode())
+        });
         self.viewport.replace(rebuilt.viewer, true);
-        if let (Some(viewer), Some(locals)) = (self.viewport.viewer.as_mut(), locals) {
-            let _ = viewer.set_joint_locals(&locals);
+        if let (Some(viewer), Some((locals, edits, selected, mode))) = (self.viewport.viewer.as_mut(), old) {
+            if self.free_pose && self.original.len() == locals.len() {
+                // Rebuilds the gizmo from the captured pose plus the edits so Reset still returns there.
+                let _ = viewer.set_joint_locals(&self.original);
+                viewer.set_gizmo_enabled(true);
+                for edit in edits {
+                    let _ = viewer.set_pose_edit(edit.joint, edit);
+                }
+                if let Some(joint) = selected {
+                    viewer.gizmo_mut().select(joint);
+                }
+                viewer.gizmo_mut().set_mode(mode);
+            } else {
+                let _ = viewer.set_joint_locals(&locals);
+                viewer.set_gizmo_enabled(self.free_pose);
+            }
         }
         self.loaded = Some(rebuilt.loaded);
         self.overridden.clear();
@@ -522,7 +517,7 @@ impl ExportTab {
             }
             return;
         }
-        self.free_pose = false;
+        self.set_free_pose(false);
         self.no_animation = false;
         self.clip = Some(clip);
         self.playing = true;
@@ -534,7 +529,7 @@ impl ExportTab {
     /// "No animation": the bind pose, which is also what the rigged export writes.
     fn rest(&mut self) {
         self.no_animation = true;
-        self.free_pose = false;
+        self.set_free_pose(false);
         self.clip = None;
         self.requested_clip = None;
         self.playing = false;
@@ -715,15 +710,12 @@ impl ExportTab {
 
     // ---- free pose ----
 
-    fn joint_index(&self, name: &str) -> Option<usize> {
-        self.joint_names.iter().position(|n| n == name)
-    }
-
+    /// bones.js `setEnabled`: pauses playback and captures the reset target; the viewer draws and drives the gizmo.
     fn set_free_pose(&mut self, enabled: bool) {
-        if self.viewport.viewer.is_none() {
-            return;
-        }
         if enabled && !self.free_pose {
+            if self.viewport.viewer.is_none() {
+                return;
+            }
             self.pause();
             self.playing = false;
             self.original = self
@@ -732,55 +724,11 @@ impl ExportTab {
                 .as_ref()
                 .map(|v| v.joint_locals())
                 .unwrap_or_default();
-            self.bone = self
-                .joint_index("HEAD")
-                .or_else(|| JOINTS.iter().find_map(|(n, _)| self.joint_index(n)));
-            self.move_mode = false;
         }
-        self.free_pose = enabled;
-    }
-
-    fn edit_bone(&mut self, joint: usize, values: [f32; 3]) {
-        let Some(viewer) = self.viewport.viewer.as_mut() else {
-            return;
-        };
-        let mut locals = viewer.joint_locals();
-        let Some(local) = locals.get_mut(joint) else {
-            return;
-        };
-        let (scale, rotation, translation) = local.to_scale_rotation_translation();
-        *local = if self.move_mode {
-            Mat4::from_scale_rotation_translation(scale, rotation, Vec3::from_array(values))
-        } else {
-            let [x, y, z] = values.map(f32::to_radians);
-            Mat4::from_scale_rotation_translation(
-                scale,
-                Quat::from_euler(EulerRot::XYZ, x, y, z),
-                translation,
-            )
-        };
-        if let Err(e) = viewer.set_joint_locals(&locals) {
-            self.status = e.to_string();
+        self.free_pose = enabled && self.viewport.viewer.is_some();
+        if let Some(viewer) = self.viewport.viewer.as_mut() {
+            viewer.set_gizmo_enabled(self.free_pose);
         }
-    }
-
-    fn reset_bones(&mut self, joint: Option<usize>) {
-        let Some(viewer) = self.viewport.viewer.as_mut() else {
-            return;
-        };
-        if self.original.len() != self.joint_names.len() {
-            return;
-        }
-        let mut locals = viewer.joint_locals();
-        match joint {
-            Some(j) => {
-                if let (Some(dst), Some(src)) = (locals.get_mut(j), self.original.get(j)) {
-                    *dst = *src;
-                }
-            }
-            None => locals.clone_from(&self.original),
-        }
-        let _ = viewer.set_joint_locals(&locals);
     }
 
     // ---- export ----
@@ -937,25 +885,7 @@ impl ExportTab {
     }
 
     fn stage(&mut self, ui: &mut egui::Ui, rect: Rect, jobs: &Jobs, settings: &Settings, catalog: &Catalog) {
-        let markers: Vec<Marker> = if self.free_pose {
-            JOINTS
-                .iter()
-                .filter_map(|(name, _)| self.joint_index(name))
-                .map(|joint| Marker {
-                    joint,
-                    selected: Some(joint) == self.bone,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let response = self.viewport.show(ui, rect, &markers);
-        if let Some(joint) = response.picked {
-            self.bone = Some(joint);
-            if self.joint_names.get(joint).map(String::as_str) != Some("BASE") {
-                self.move_mode = false;
-            }
-        }
+        self.viewport.show(ui, rect);
         let painter = ui.painter().clone();
         if self.viewport.viewer.is_none() {
             let button_h = widgets::line(13.0) + 16.0;
@@ -1295,58 +1225,50 @@ impl ExportTab {
             "Rotate the head, torso, arms or legs. Select Whole avatar to move the character.",
         );
         ui.add_space(12.0);
-        let current = self
-            .bone
-            .and_then(|b| self.joint_names.get(b))
-            .and_then(|n| JOINTS.iter().find(|(j, _)| j == n))
+        let Some(viewer) = self.viewport.viewer.as_mut() else {
+            return;
+        };
+        let listed = viewer.gizmo().listed_joints().to_vec();
+        let current = viewer
+            .gizmo()
+            .selected()
+            .and_then(|s| listed.iter().find(|(j, _)| *j == s))
             .map_or("", |(_, label)| label);
         widgets::field_label(ui, "Bone");
         ui.add_space(5.0);
-        let available: Vec<(usize, &str, &str)> = JOINTS
-            .iter()
-            .filter_map(|(name, label)| self.joint_index(name).map(|i| (i, *name, *label)))
-            .collect();
-        let options: Vec<String> = available.iter().map(|(_, _, l)| (*l).to_string()).collect();
+        let options: Vec<String> = listed.iter().map(|(_, l)| (*l).to_string()).collect();
         let w = ui.available_width();
         if let Some(k) = widgets::select(ui, "bone-select", current, &options, w) {
-            let (index, name, _) = available[k];
-            self.bone = Some(index);
-            if name != "BASE" {
-                self.move_mode = false;
-            }
+            viewer.gizmo_mut().select(listed[k].0);
         }
-        let Some(joint) = self.bone else {
+        let Some(joint) = viewer.gizmo().selected() else {
             return;
         };
-        let is_base = self.joint_names.get(joint).is_some_and(|n| n == "BASE");
+        let can_translate = viewer.gizmo().can_translate();
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if widgets::button(ui, "Rotate", Kind::Short, true).clicked() {
-                self.move_mode = false;
+                viewer.gizmo_mut().set_mode(GizmoMode::Rotate);
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if widgets::button(ui, "Move", Kind::Short, is_base).clicked() {
-                    self.move_mode = true;
+                if widgets::button(ui, "Move", Kind::Short, can_translate).clicked() {
+                    viewer.gizmo_mut().set_mode(GizmoMode::Translate);
                 }
             });
         });
         ui.add_space(8.0);
-        let local = self
-            .viewport
-            .viewer
-            .as_ref()
-            .and_then(|v| v.joint_locals().get(joint).copied())
-            .unwrap_or(Mat4::IDENTITY);
-        let (_, rotation, translation) = local.to_scale_rotation_translation();
-        let mut values = if self.move_mode {
-            translation.to_array()
+        let translate = viewer.gizmo().mode() == GizmoMode::Translate;
+        let Some(pose) = viewer.joint_pose(joint) else {
+            return;
+        };
+        let mut values = if translate {
+            pose.translation.to_array()
         } else {
-            let (x, y, z) = rotation.to_euler(EulerRot::XYZ);
-            [x.to_degrees(), y.to_degrees(), z.to_degrees()]
+            pose.rotation_degrees.to_array()
         };
         let mut changed = false;
         let col = (ui.available_width() - 16.0) / 3.0;
-        let move_mode = self.move_mode;
+        let enabled = !translate || can_translate;
         ui.horizontal(|ui| {
             for (i, (axis, value)) in ["X", "Y", "Z"].iter().zip(values.iter_mut()).enumerate() {
                 if i > 0 {
@@ -1358,39 +1280,59 @@ impl ExportTab {
                     ui.add_space(5.0);
                     ui.scope(|ui| {
                         widgets::input_style(ui);
-                        let drag = if move_mode {
+                        let drag = if translate {
                             egui::DragValue::new(value).speed(0.005).fixed_decimals(4)
                         } else {
                             egui::DragValue::new(value).speed(0.5).fixed_decimals(2)
                         };
-                        changed |= ui.add_sized([col, widgets::INPUT_H], drag).changed();
+                        changed |= ui
+                            .add_enabled_ui(enabled, |ui| ui.add_sized([col, widgets::INPUT_H], drag))
+                            .inner
+                            .changed();
                     });
                 });
             }
         });
-        if changed {
-            self.edit_bone(joint, values);
+        if changed && values.iter().all(|v| v.is_finite()) {
+            let mut edit = pose;
+            if translate {
+                edit.translation = Vec3::from_array(values);
+            } else {
+                edit.rotation_degrees = Vec3::from_array(values);
+            }
+            if let Err(e) = viewer.set_pose_edit(joint, edit) {
+                self.status = e.to_string();
+            }
         }
         ui.add_space(12.0);
         widgets::muted(
             ui,
-            if self.move_mode {
+            if translate {
                 "Local position in metres"
             } else {
                 "Local rotation in degrees"
             },
         );
         ui.add_space(12.0);
+        let mut reset: Option<Option<usize>> = None;
         ui.horizontal(|ui| {
             if widgets::button(ui, "Reset bone", Kind::Short, true).clicked() {
-                self.reset_bones(Some(joint));
+                reset = Some(Some(joint));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if widgets::button(ui, "Reset pose", Kind::Short, true).clicked() {
-                    self.reset_bones(None);
+                    reset = Some(None);
                 }
             });
         });
+        let result = match reset {
+            Some(Some(joint)) => viewer.reset_joint(joint),
+            Some(None) => viewer.reset_pose(),
+            None => Ok(()),
+        };
+        if let Err(e) = result {
+            self.status = e.to_string();
+        }
         ui.add_space(8.0);
     }
 

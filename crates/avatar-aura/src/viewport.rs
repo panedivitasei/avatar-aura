@@ -1,12 +1,12 @@
 // egui host for `avatar_view::Viewer`: renders into an offscreen texture that egui samples, with
-// OrbitControls-style mouse input and the free-pose bone markers drawn on top.
+// OrbitControls-style mouse input; free-pose presses go to the viewer's bone gizmo first.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use avatar_export::scene::Scene;
 use avatar_view::Viewer;
-use eframe::egui::{self, Color32, Rect, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
 use crate::widgets::{self, Paint};
 use eframe::egui_wgpu;
@@ -37,23 +37,13 @@ struct Target {
     id: egui::TextureId,
 }
 
-/// One marker drawn over the viewport.
-pub struct Marker {
-    pub joint: usize,
-    pub selected: bool,
-}
-
-#[derive(Default)]
-pub struct ViewportResponse {
-    /// Joint whose marker was clicked.
-    pub picked: Option<usize>,
-}
-
 pub struct Viewport {
     gpu: Gpu,
     renderer: Arc<egui::mutex::RwLock<egui_wgpu::Renderer>>,
     pub viewer: Option<Viewer>,
     target: Option<Target>,
+    /// The primary press that started on a gizmo handle or marker, so the camera ignores it.
+    gizmo_owns_press: bool,
 }
 
 impl Viewport {
@@ -66,6 +56,7 @@ impl Viewport {
             renderer: state.renderer.clone(),
             viewer: None,
             target: None,
+            gizmo_owns_press: false,
         }
     }
 
@@ -81,6 +72,7 @@ impl Viewport {
             }
         }
         self.viewer = Some(viewer);
+        self.gizmo_owns_press = false;
     }
 
     fn ensure_target(&mut self, size: [u32; 2]) -> Option<(&wgpu::TextureView, egui::TextureId)> {
@@ -120,17 +112,34 @@ impl Viewport {
     }
 
     /// Draws the viewport into `rect`, handling orbit (left drag), pan (right or middle drag) and zoom (wheel).
-    pub fn show(&mut self, ui: &mut egui::Ui, rect: Rect, markers: &[Marker]) -> ViewportResponse {
+    /// With free pose on, primary presses on a gizmo handle or joint marker drive the gizmo instead of the camera.
+    pub fn show(&mut self, ui: &mut egui::Ui, rect: Rect) {
         let id = ui.id().with("viewport");
         let response = ui.interact(rect, id, Sense::click_and_drag());
         let painter = ui.painter_at(rect.expand(1.0));
-        let mut out = ViewportResponse::default();
+        let ppp = ui.ctx().pixels_per_point();
+        let size = [
+            (rect.width() * ppp).round().max(1.0) as u32,
+            (rect.height() * ppp).round().max(1.0) as u32,
+        ];
         let Some(viewer) = self.viewer.as_mut() else {
+            self.gizmo_owns_press = false;
             stage_frame(&painter, rect, None);
-            return out;
+            return;
+        };
+        viewer.set_viewport_size(size[0], size[1]);
+        let owned = self.gizmo_owns_press;
+        if viewer.gizmo().enabled() {
+            self.gizmo_input(ui, &response, rect, ppp);
+        } else {
+            self.gizmo_owns_press = false;
+        }
+        let Some(viewer) = self.viewer.as_mut() else {
+            return;
         };
         let height = rect.height().max(1.0);
-        if response.dragged_by(egui::PointerButton::Primary) {
+        let camera_drag = !(owned || self.gizmo_owns_press);
+        if camera_drag && response.dragged_by(egui::PointerButton::Primary) {
             let d = response.drag_delta();
             let tau = std::f32::consts::TAU;
             viewer.camera_mut().orbit(-tau * d.x / height, tau * d.y / height);
@@ -147,18 +156,13 @@ impl Viewport {
             }
         }
 
-        let ppp = ui.ctx().pixels_per_point();
-        let size = [
-            (rect.width() * ppp).round().max(1.0) as u32,
-            (rect.height() * ppp).round().max(1.0) as u32,
-        ];
         let gpu = self.gpu.clone();
         let Some((view, tex)) = self.ensure_target(size) else {
-            return out;
+            return;
         };
         let view = view.clone();
         let Some(viewer) = self.viewer.as_mut() else {
-            return out;
+            return;
         };
         let mut encoder = gpu
             .device
@@ -168,44 +172,56 @@ impl Viewport {
         viewer.render(&mut encoder, &view, size[0], size[1]);
         gpu.queue.submit([encoder.finish()]);
         stage_frame(&painter, rect, Some(tex));
+    }
 
-        if !markers.is_empty() {
-            let positions = viewer.bone_screen_positions();
-            let to_ui = |p: glam::Vec2| rect.min + Vec2::new(p.x, p.y) / ppp;
-            let click = response
-                .clicked()
-                .then(|| response.interact_pointer_pos())
-                .flatten();
-            let mut nearest: Option<(usize, f32)> = None;
-            for marker in markers {
-                let Some(Some(p)) = positions.get(marker.joint) else {
-                    continue;
-                };
-                let at = to_ui(*p);
-                if !rect.contains(at) {
-                    continue;
-                }
-                let fill = if marker.selected {
-                    Color32::from_rgb(0xE8, 0x8A, 0x1A)
-                } else {
-                    Color32::from_rgb(0x77, 0xAA, 0x35)
-                };
-                painter.circle(
-                    at,
-                    6.0,
-                    fill,
-                    Stroke::new(2.0, Color32::from_rgb(0xF5, 0xFF, 0xE9)),
-                );
-                if let Some(c) = click {
-                    let d = c.distance(at);
-                    if d <= 18.0 && nearest.is_none_or(|(_, best)| d < best) {
-                        nearest = Some((marker.joint, d));
-                    }
+    /// Hover, press, drag and release for the free-pose gizmo, in viewport texture pixels.
+    fn gizmo_input(&mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect, ppp: f32) {
+        let Some(viewer) = self.viewer.as_mut() else {
+            return;
+        };
+        let to_px = |p: Pos2| {
+            let v = (p - rect.min) * ppp;
+            (v.x, v.y)
+        };
+        let (pressed, down, latest) = ui.input(|i| {
+            (
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down(),
+                i.pointer.interact_pos(),
+            )
+        });
+        let mut over_gizmo = false;
+        if self.gizmo_owns_press {
+            if let (true, Some(p)) = (down, latest) {
+                let (x, y) = to_px(p);
+                viewer.gizmo_drag(x, y);
+            } else {
+                viewer.gizmo_release();
+                self.gizmo_owns_press = false;
+            }
+        } else if let Some(p) = response.hover_pos() {
+            let (x, y) = to_px(p);
+            over_gizmo = viewer.gizmo_hover(x, y);
+            if pressed {
+                if viewer.gizmo_press(x, y) {
+                    self.gizmo_owns_press = true;
+                } else if let Some(joint) = viewer.pick_joint(x, y) {
+                    viewer.gizmo_mut().select(joint);
+                    self.gizmo_owns_press = true;
                 }
             }
-            out.picked = nearest.map(|(j, _)| j);
+        } else if viewer.gizmo().hovered().is_some() {
+            // Off-viewport pixel clears the stale handle highlight once the pointer leaves.
+            viewer.gizmo_hover(-1.0e6, -1.0e6);
         }
-        out
+        let gizmo = viewer.gizmo();
+        if gizmo.is_dragging() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if gizmo.hovered().is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        } else if over_gizmo {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
     }
 }
 
