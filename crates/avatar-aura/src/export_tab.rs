@@ -73,6 +73,8 @@ pub struct ExportTab {
     applied: Option<ExpressionTextures>,
     overridden: BTreeSet<usize>,
     faces: HashMap<usize, Arc<PreparedFace>>,
+    /// Mirror of `Settings::split_animations` for the playback code.
+    split: bool,
     face: Option<FacePlayer>,
     face_selected: Option<usize>,
     face_request: u64,
@@ -122,6 +124,7 @@ impl ExportTab {
             applied: None,
             overridden: BTreeSet::new(),
             faces: HashMap::new(),
+            split: false,
             face: None,
             face_selected: None,
             face_request: 0,
@@ -670,6 +673,22 @@ impl ExportTab {
         self.frame = frame.min(self.clip_frames() - 1);
         self.playhead = f64::from(self.frame) / self.clip_fps();
         self.pose_at(self.frame as f32);
+        if !self.split {
+            self.sync_face();
+        }
+    }
+
+    /// Combined mode: the face player sits at the body clip's time instead of running its own clock.
+    fn sync_face(&mut self) {
+        let Some(face) = &self.face else {
+            return;
+        };
+        let anim = &face.face.animation;
+        let fps = if anim.fps > 0.0 { anim.fps } else { 30.0 };
+        let frame = ((self.playhead * fps).floor() as u32).min(anim.frames.saturating_sub(1));
+        if frame != face.frame {
+            self.seek_face(frame);
+        }
     }
 
     /// Advances the clip and face players; true while either needs another frame.
@@ -685,7 +704,11 @@ impl ExportTab {
             self.pose_at(f as f32);
             animating = true;
         }
-        if let Some(face) = self.face.as_mut() {
+        if !self.split {
+            if animating {
+                self.sync_face();
+            }
+        } else if let Some(face) = self.face.as_mut() {
             if face.playing {
                 let anim = &face.face.animation;
                 let fps = if anim.fps > 0.0 { anim.fps } else { 30.0 };
@@ -803,6 +826,9 @@ impl ExportTab {
             key: None,
         });
         self.seek_face(0);
+        if !self.split {
+            self.sync_face();
+        }
     }
 
     fn seek_face(&mut self, frame: u32) {
@@ -1130,6 +1156,7 @@ impl ExportTab {
         catalog: &Catalog,
         thumbs: &HashMap<String, egui::TextureHandle>,
     ) {
+        self.split = settings.split_animations;
         widgets::window_card(ui, rect, "Pose your avatar", |ui| {
             self.load_all_ui(ui, jobs);
             self.transport_ui(ui);
@@ -1166,23 +1193,47 @@ impl ExportTab {
                     } else {
                         self.activate_clip(i - 1, Some(jobs));
                     }
+                    if !settings.split_animations {
+                        self.choose_face(i.checked_sub(1), jobs);
+                    }
                 }
             }
-            ui.add_space(16.0);
-            widgets::h3(ui, "Face animation");
-            if self.loaded.is_some() {
-                let tiles = self.clip_tiles("No face animation", catalog, thumbs);
-                let selected = self
-                    .face_selected
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "none".into());
-                if let Some(i) = widgets::strip(ui, "face-animation", &tiles, Some(&selected), active) {
-                    self.choose_face(i.checked_sub(1), jobs);
-                }
-            } else {
-                ui.add_space(96.0);
+            ui.add_space(12.0);
+            if widgets::checkbox(
+                ui,
+                &mut settings.split_animations,
+                "Split animations",
+                14.0,
+                active,
+            )
+            .changed()
+                && !settings.split_animations
+            {
+                self.split = false;
+                let clip = if self.no_animation {
+                    None
+                } else {
+                    self.requested_clip
+                };
+                self.choose_face(clip, jobs);
             }
-            self.face_ui(ui);
+            if settings.split_animations {
+                ui.add_space(16.0);
+                widgets::h3(ui, "Face animation");
+                if self.loaded.is_some() {
+                    let tiles = self.clip_tiles("No face animation", catalog, thumbs);
+                    let selected = self
+                        .face_selected
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "none".into());
+                    if let Some(i) = widgets::strip(ui, "face-animation", &tiles, Some(&selected), active) {
+                        self.choose_face(i.checked_sub(1), jobs);
+                    }
+                } else {
+                    ui.add_space(96.0);
+                }
+                self.face_ui(ui);
+            }
             ui.add_space(18.0);
             let w = ui.available_width();
             let (rule, _) = ui.allocate_exact_size(egui::vec2(w, 1.0), egui::Sense::hover());

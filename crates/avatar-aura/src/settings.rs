@@ -40,6 +40,8 @@ pub struct Settings {
     pub window: Option<[f32; 2]>,
     /// `import` or `export`.
     pub tab: String,
+    /// Off pairs each body clip with the face animation of the same name; on selects them separately.
+    pub split_animations: bool,
 }
 
 impl Settings {
