@@ -419,7 +419,11 @@ pub fn button_in(ui: &mut Ui, rect: Rect, label: &str, kind: Kind, enabled: bool
         .painter()
         .layout_no_wrap(label.to_string(), font(13.0, W::Regular), c::BUTTON_TEXT);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
-    let response = ui.interact(rect, ui.id().with(("btn", label, rect.min.x as i32)), sense);
+    let response = ui.interact(
+        rect,
+        ui.id().with(("btn", label, rect.min.x as i32, rect.min.y as i32)),
+        sense,
+    );
     paint_button(ui, rect, &galley, kind, enabled, &response);
     response
 }
