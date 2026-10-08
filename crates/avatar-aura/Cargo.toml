@@ -25,3 +25,7 @@ avatar-export = { path = "../avatar-export" }
 avatar-bake = { path = "../avatar-bake" }
 avatar-view = { path = "../avatar-view" }
 stfs = { path = "../stfs" }
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }

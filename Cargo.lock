@@ -419,12 +419,14 @@ dependencies = [
  "include_dir",
  "miniz_oxide 0.9.1",
  "pollster 1.0.1",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",
  "sha1",
  "stfs",
  "toml",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

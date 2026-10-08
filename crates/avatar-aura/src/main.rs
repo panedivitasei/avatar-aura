@@ -1,10 +1,11 @@
 // Avatar Aura desktop app: imports avatar items into a closet and exports posed avatars as 3D models.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
 mod bake;
+mod caption;
 mod catalog;
 mod export_tab;
 mod gpu;

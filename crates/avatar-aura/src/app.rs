@@ -34,13 +34,14 @@ pub struct AuraApp {
     errors: Vec<String>,
     /// `--load-avatar`: open the Export tab and load the saved avatar on the first frame.
     load_avatar: bool,
+    /// Raw window handle for the dark caption, re-applied over the first frames once the window is shown.
+    caption: Option<raw_window_handle::RawWindowHandle>,
+    caption_frames: u8,
 }
 
 fn style(ctx: &egui::Context) {
     widgets::install_fonts(ctx);
     ctx.set_theme(egui::Theme::Light);
-    // The original's WebView2 host draws a dark caption bar.
-    ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
     ctx.style_mut_of(egui::Theme::Light, |style| {
         let v = &mut style.visuals;
         v.selection.bg_fill = c::GREEN.gamma_multiply(0.35);
@@ -172,6 +173,10 @@ impl AuraApp {
         style(&cc.egui_ctx);
         let jobs = Jobs::new(&cc.egui_ctx);
         let mut errors = Vec::new();
+        let caption = crate::caption::handle(cc);
+        if let Some(e) = caption.and_then(|h| crate::caption::darken(h).err()) {
+            errors.push(format!("caption: {e}"));
+        }
         let catalog = Catalog::load().unwrap_or_else(|e| {
             errors.push(format!("bundled catalog: {e}"));
             Catalog::default()
@@ -209,6 +214,8 @@ impl AuraApp {
             export,
             errors,
             load_avatar,
+            caption,
+            caption_frames: 3,
         })
     }
 
@@ -345,6 +352,13 @@ impl eframe::App for AuraApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.dispatch(&ctx);
+        if self.caption_frames > 0 {
+            self.caption_frames -= 1;
+            if let Some(handle) = self.caption {
+                let _ = crate::caption::darken(handle);
+            }
+            ctx.request_repaint();
+        }
         if std::mem::take(&mut self.load_avatar) {
             self.tab = Tab::Export;
             self.export.load(&self.jobs, &self.settings, &self.catalog);
