@@ -285,6 +285,7 @@ pub fn image_rounded(painter: &egui::Painter, rect: Rect, radius: f32, texture: 
 const BTN: &[(f32, Color32)] = &[(0.0, rgb_c(0xE6E6E6)), (0.9, rgb_c(0xD4D4D4))];
 const GREEN_UP: &[(f32, Color32)] = &[(0.0, rgb_c(0x738F32)), (1.0, rgb_c(0x8EDB46))];
 const ORANGE_UP: &[(f32, Color32)] = &[(0.0, rgb_c(0xD57920)), (1.0, rgb_c(0xFFCB78))];
+const RED_UP: &[(f32, Color32)] = &[(0.0, rgb_c(0xA83A2E)), (1.0, rgb_c(0xE5604F))];
 const TITLE: &[(f32, Color32)] = &[
     (0.07, rgb_c(0x707070)),
     (0.63, rgb_c(0x999999)),
@@ -384,6 +385,8 @@ pub fn section_heading(ui: &mut Ui, title: &str, blurb: &str) {
 pub enum Kind {
     Short,
     Primary,
+    /// Dismiss buttons: red on hover.
+    Close,
 }
 
 /// `.btn-short` (or `.btn-short.primary`) at the default 8px 10px padding.
@@ -440,6 +443,7 @@ fn paint_button(
     let (stops, angle, color) = match (hot, kind) {
         (true, Kind::Short) => (GREEN_UP, 0.0, Color32::WHITE),
         (true, Kind::Primary) => (ORANGE_UP, 0.0, rgb(0x261706)),
+        (true, Kind::Close) => (RED_UP, 0.0, Color32::WHITE),
         _ => (BTN, 180.0, c::BUTTON_TEXT),
     };
     fill(&painter, rect, 0.0, &Paint::Linear(angle, stops));
@@ -1028,7 +1032,7 @@ pub fn dialog(ctx: &egui::Context, id: &str, title: &str, add: impl FnOnce(&mut 
                     add(ui);
                     ui.add_space(16.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        if button(ui, "Close", Kind::Short, true).clicked() {
+                        if button(ui, "Close", Kind::Close, true).clicked() {
                             open = false;
                         }
                     });
@@ -1090,7 +1094,7 @@ impl LogDialog {
                     ),
                     vec2(close_w, line(13.0) + 16.0),
                 );
-                if button_in(ui, close, "Close", Kind::Short, true).clicked() {
+                if button_in(ui, close, "Close", Kind::Close, true).clicked() {
                     open = false;
                 }
                 let foot_h = line(13.0) + 16.0;
