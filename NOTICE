@@ -1,3 +1,7 @@
 The avatar-formats crate ports the avatar asset decoders of the Xenia Xbox 360
 emulator research project (Copyright 2022-2026 Ben Vanik, BSD 3-Clause,
 https://github.com/xenia-project/xenia). The BSD terms apply to those portions.
+
+The LZX decompressor in avatar-formats (src/lzx.rs) is a port of lzxd.c from
+libmspack (Copyright 2003-2023 Stuart Caie, LGPL 2.1,
+https://www.cabextract.org.uk/libmspack/). The LGPL terms apply to that file.
