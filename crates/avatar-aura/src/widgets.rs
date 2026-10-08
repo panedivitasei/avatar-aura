@@ -913,10 +913,14 @@ pub fn strip(
                 })
                 .fold(Vec2::ZERO, |a, b| a + b)
         });
-        let d = if delta.x.abs() > delta.y.abs() {
+        // A horizontal wheel or shift+wheel pages; a plain wheel scrolls the card.
+        let shift = ui.input(|i| i.modifiers.shift);
+        let d = if delta.x != 0.0 {
             delta.x
-        } else {
+        } else if shift {
             delta.y
+        } else {
+            0.0
         };
         if d != 0.0 {
             if d < 0.0 && page + 1 < pages {
@@ -924,8 +928,8 @@ pub fn strip(
             } else if d > 0.0 && page > 0 {
                 page -= 1;
             }
+            ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
         }
-        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
     }
 
     let track_x = rect.min.x + 32.0;
