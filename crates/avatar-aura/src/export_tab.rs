@@ -1060,14 +1060,6 @@ impl ExportTab {
             if widgets::button_in(ui, button, "Load avatar", Kind::Primary, !self.loading).clicked() {
                 self.load(jobs, settings, catalog);
             }
-        } else {
-            painter.text(
-                rect.left_bottom() + egui::vec2(14.0, -12.0),
-                egui::Align2::LEFT_BOTTOM,
-                "Drag to orbit \u{b7} Scroll to zoom",
-                widgets::font(11.0, W::Regular),
-                c::CAPTION,
-            );
         }
     }
 
