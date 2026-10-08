@@ -3,7 +3,7 @@
 
 use anyhow::{anyhow, bail, Context};
 
-use crate::catalog::{self, Catalog};
+use crate::catalog::Catalog;
 use crate::paths;
 use crate::session::{self, TextureCache};
 use crate::settings::Settings;
@@ -12,10 +12,6 @@ const SIZE: u32 = 256;
 
 pub fn run() -> anyhow::Result<()> {
     let catalog = Catalog::load()?;
-    let thumbs = catalog::decode_thumbs(&paths::asset(&["thumbs"]));
-    if thumbs.is_empty() {
-        bail!("no thumbnails under {}", paths::asset(&["thumbs"]).display());
-    }
     for mannequin in ["mannequin_male.amd", "mannequin_female.amd"] {
         let path = paths::asset(&["mannequins", mannequin]);
         if !path.is_file() {
@@ -23,11 +19,10 @@ pub fn run() -> anyhow::Result<()> {
         }
     }
     println!(
-        "assets: {} ({} expressions, {} clips, {} thumbnails)",
+        "assets: {} ({} expressions, {} clips)",
         paths::assets_dir().display(),
         catalog.expressions.len(),
-        catalog.clips.len(),
-        thumbs.len()
+        catalog.clips.len()
     );
     let (gpu, adapter) = crate::gpu::headless()?;
     println!("adapter: {adapter}");

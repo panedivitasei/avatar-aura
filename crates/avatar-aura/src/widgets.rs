@@ -813,10 +813,7 @@ fn label_job(label: &str, width: f32) -> egui::text::LayoutJob {
 }
 
 fn tile_content(tile: &Tile, label_h: f32) -> f32 {
-    let mut h = label_h + 4.0;
-    if tile.thumb.is_some() {
-        h += 58.0;
-    }
+    let mut h = label_h + 4.0 + 58.0;
     if tile.badge.is_some() {
         h += 4.0 + 13.0 + 6.0;
     }

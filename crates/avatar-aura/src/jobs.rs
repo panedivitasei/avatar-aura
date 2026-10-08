@@ -73,7 +73,6 @@ pub struct TileOutcome {
 }
 
 pub enum Msg {
-    Thumbs(Vec<(String, egui::ColorImage)>),
     ImportAnalyzed {
         session: u64,
         outcome: Outcome,

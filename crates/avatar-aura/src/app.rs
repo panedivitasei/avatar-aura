@@ -1,16 +1,15 @@
 // Window shell from web/index.html: header, Import and Export tabs, footer action row, message dispatch and settings.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, pos2, Color32, Rect, RichText, Sense, Stroke};
 
-use crate::catalog::{self, Catalog};
+use crate::catalog::Catalog;
 use crate::export_tab::ExportTab;
 use crate::import_tab::ImportTab;
-use crate::jobs::{rgba_to_color, Jobs, Msg};
-use crate::paths;
+use crate::jobs::{Jobs, Msg};
 use crate::settings::Settings;
 use crate::viewport::Viewport;
 use crate::widgets::{self, c, Kind, Paint, W};
@@ -160,48 +159,25 @@ fn stop_color(stops: &[(f32, Color32)], t: f32) -> Color32 {
     prev.1
 }
 
-/// Strip tiles: the bundled set, overlaid by the tiles rendered for one export session.
+/// Strip tiles rendered for one export session; empty until Load All has run for the avatar on screen.
 #[derive(Default)]
 struct Thumbs {
     shown: HashMap<String, egui::TextureHandle>,
-    bundled: HashMap<String, egui::TextureHandle>,
-    overridden: BTreeSet<String>,
     session: Option<u64>,
 }
 
 impl Thumbs {
-    fn add_bundled(&mut self, name: String, tex: egui::TextureHandle) {
-        if !self.overridden.contains(&name) {
-            self.shown.insert(name.clone(), tex.clone());
-        }
-        self.bundled.insert(name, tex);
-    }
-
-    fn override_with(&mut self, session: u64, tiles: Vec<(String, egui::TextureHandle)>) {
-        if self.session.is_some_and(|s| s != session) {
-            self.restore();
-        }
+    fn add(&mut self, session: u64, tiles: Vec<(String, egui::TextureHandle)>) {
+        self.sync(session);
         self.session = Some(session);
-        for (name, tex) in tiles {
-            self.shown.insert(name.clone(), tex);
-            self.overridden.insert(name);
-        }
+        self.shown.extend(tiles);
     }
 
-    /// Puts the bundled tiles back once the export tab shows a different avatar.
+    /// Clears the tiles once the export tab shows a different avatar.
     fn sync(&mut self, session: u64) {
         if self.session.is_some_and(|s| s != session) {
-            self.restore();
-        }
-    }
-
-    fn restore(&mut self) {
-        self.session = None;
-        for name in std::mem::take(&mut self.overridden) {
-            match self.bundled.get(&name) {
-                Some(tex) => self.shown.insert(name, tex.clone()),
-                None => self.shown.remove(&name),
-            };
+            self.session = None;
+            self.shown.clear();
         }
     }
 }
@@ -229,13 +205,6 @@ impl AuraApp {
         });
         let settings = Settings::load();
         let settings_tab_is_export = settings.tab == "export";
-        jobs.spawn("thumbnails", |reply| {
-            let thumbs = catalog::decode_thumbs(&paths::asset(&["thumbs"]))
-                .into_iter()
-                .map(|(name, img)| (name, rgba_to_color(&img)))
-                .collect();
-            reply.send(Msg::Thumbs(thumbs));
-        });
         let info = state.adapter.get_info();
         let mut export = ExportTab::new(Viewport::new(state));
         export.note_line(format!(
@@ -268,13 +237,6 @@ impl AuraApp {
     fn dispatch(&mut self, ctx: &egui::Context) {
         for msg in self.jobs.drain() {
             match msg {
-                Msg::Thumbs(images) => {
-                    for (name, img) in images {
-                        let tex =
-                            ctx.load_texture(format!("thumb-{name}"), img, egui::TextureOptions::LINEAR);
-                        self.thumbs.add_bundled(name, tex);
-                    }
-                }
                 Msg::Tiles { session, images } => {
                     if session != self.export.session() {
                         continue;
@@ -287,7 +249,7 @@ impl AuraApp {
                             (name, tex)
                         })
                         .collect();
-                    self.thumbs.override_with(session, tiles);
+                    self.thumbs.add(session, tiles);
                 }
                 Msg::Failed(e) => {
                     self.export.status.clone_from(&e);
@@ -510,10 +472,8 @@ mod tests {
     fn rendered_tiles_last_for_their_session_only() {
         let ctx = egui::Context::default();
         let mut thumbs = Thumbs::default();
-        let bundled = texture(&ctx, "bundled");
-        thumbs.add_bundled("mouth1.png".into(), bundled.clone());
         let rendered = texture(&ctx, "rendered");
-        thumbs.override_with(
+        thumbs.add(
             3,
             vec![
                 ("mouth1.png".into(), rendered.clone()),
@@ -522,11 +482,7 @@ mod tests {
         );
         thumbs.sync(3);
         assert_eq!(thumbs.shown["mouth1.png"].id(), rendered.id());
-        // A late bundled decode does not hide the session's tile.
-        thumbs.add_bundled("mouth1.png".into(), bundled.clone());
-        assert_eq!(thumbs.shown["mouth1.png"].id(), rendered.id());
         thumbs.sync(4);
-        assert_eq!(thumbs.shown["mouth1.png"].id(), bundled.id());
-        assert!(!thumbs.shown.contains_key("clip_Custom.png"));
+        assert!(thumbs.shown.is_empty());
     }
 }

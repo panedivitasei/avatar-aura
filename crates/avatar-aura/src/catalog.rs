@@ -1,6 +1,5 @@
 // The bundled catalog.json (expression and clip names with thumbnails) and the clip list it seeds.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -49,24 +48,6 @@ pub fn clip_thumb(name: &str) -> String {
 /// Thumbnail file name for an expression id such as `mouth:3`.
 pub fn expression_thumb(id: &str) -> String {
     format!("{}.png", paths::safe_name(id))
-}
-
-/// Decodes every PNG under `assets/thumbs`, keyed by file name.
-pub fn decode_thumbs(dir: &Path) -> HashMap<String, image::RgbaImage> {
-    let mut out = HashMap::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")) {
-            if let Ok(img) = image::open(&path) {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                out.insert(name, img.to_rgba8());
-            }
-        }
-    }
-    out
 }
 
 /// Where a clip comes from: a pack animation by name or an `.AvatarAnimation` file.
