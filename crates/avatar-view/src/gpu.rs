@@ -27,6 +27,10 @@ const CONTACT_WGSL: &str = concat!(
     include_str!("shaders/contact.wgsl")
 );
 const RESOLVE_WGSL: &str = include_str!("shaders/resolve.wgsl");
+const OVERLAY_WGSL: &str = concat!(
+    include_str!("shaders/common.wgsl"),
+    include_str!("shaders/overlay.wgsl")
+);
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -62,6 +66,55 @@ const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
     4 => Uint16x4,
     5 => Float32x4,
 ];
+
+/// Gizmo and marker vertex in world space; `kind` 1 shades the marker sprite from `uv`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct OverlayVertex {
+    position: [f32; 3],
+    kind: f32,
+    uv: [f32; 2],
+    color: [f32; 4],
+}
+
+impl OverlayVertex {
+    pub fn flat(position: Vec3, color: [f32; 4]) -> Self {
+        Self {
+            position: position.to_array(),
+            kind: 0.0,
+            uv: [0.0; 2],
+            color,
+        }
+    }
+
+    pub fn marker(position: Vec3, uv: [f32; 2], color: [f32; 4]) -> Self {
+        Self {
+            position: position.to_array(),
+            kind: 1.0,
+            uv,
+            color,
+        }
+    }
+}
+
+const OVERLAY_ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+    0 => Float32x3,
+    1 => Float32,
+    2 => Float32x2,
+    3 => Float32x4,
+];
+
+/// Vertex buffer and count for one frame's overlay, `None` when empty.
+pub fn overlay_buffer(device: &wgpu::Device, vertices: &[OverlayVertex]) -> Option<(wgpu::Buffer, u32)> {
+    (!vertices.is_empty()).then(|| {
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("avatar-view overlay"),
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        (buffer, vertices.len() as u32)
+    })
+}
 
 pub fn frame_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
@@ -102,6 +155,8 @@ pub struct Pipelines {
     pub background: wgpu::RenderPipeline,
     pub contact: wgpu::RenderPipeline,
     pub resolve: wgpu::RenderPipeline,
+    /// Markers and gizmo handles: no depth test, alpha blended, drawn after the avatar.
+    pub overlay: wgpu::RenderPipeline,
 }
 
 impl Pipelines {
@@ -211,6 +266,7 @@ impl Pipelines {
         let background_module = module("avatar-view background", BACKGROUND_WGSL);
         let contact_module = module("avatar-view contact", CONTACT_WGSL);
         let resolve_module = module("avatar-view resolve", RESOLVE_WGSL);
+        let overlay_module = module("avatar-view overlay", OVERLAY_WGSL);
         let depth_state = |write: bool, compare: wgpu::CompareFunction| {
             depth.then_some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
@@ -310,6 +366,35 @@ impl Pipelines {
             Some(wgpu::BlendState::ALPHA_BLENDING),
             wgpu::CompareFunction::LessEqual,
         );
+        let overlay = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("avatar-view overlay"),
+            layout: Some(&frame_only),
+            vertex: wgpu::VertexState {
+                module: &overlay_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<OverlayVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &OVERLAY_ATTRIBUTES,
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: depth_state(false, wgpu::CompareFunction::Always),
+            multisample,
+            fragment: Some(wgpu::FragmentState {
+                module: &overlay_module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let resolve = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("avatar-view resolve"),
             layout: Some(&resolve_only),
@@ -342,6 +427,7 @@ impl Pipelines {
             background,
             contact,
             resolve,
+            overlay,
         }
     }
 

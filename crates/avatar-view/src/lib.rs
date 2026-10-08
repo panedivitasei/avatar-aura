@@ -4,20 +4,23 @@
 #![forbid(unsafe_code)]
 
 pub mod camera;
+pub mod gizmo;
 mod gpu;
 pub mod pose;
 
 use std::path::{Path, PathBuf};
 
 use avatar_export::avatar::Avatar;
-use avatar_export::math::{mat_trans, M4};
+use avatar_export::math::{mat_trans, safe_id, M4};
 use avatar_export::posing::{from_local_pose, PoseBone};
 use avatar_export::scene::Scene;
-use glam::{Mat4, Vec2, Vec3, Vec4};
+use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 use image::RgbaImage;
 
 pub use camera::Camera;
-use gpu::{GpuMaterial, GpuMesh, Pipelines, Targets};
+pub use gizmo::{Gizmo, GizmoMode, Handle, PoseEdit};
+use gizmo::{JointFrame, View};
+use gpu::{GpuMaterial, GpuMesh, OverlayVertex, Pipelines, Targets};
 use pose::{clip_locals_at, from_mat4, to_mat4, PoseState};
 
 #[derive(Debug, thiserror::Error)]
@@ -85,6 +88,7 @@ pub struct Viewer {
     contact: Vec4,
     targets: Option<Targets>,
     last_size: (u32, u32),
+    gizmo: Gizmo,
 }
 
 impl Viewer {
@@ -115,6 +119,7 @@ impl Viewer {
             contact: Vec4::ZERO,
             targets: None,
             last_size: (1, 1),
+            gizmo: Gizmo::default(),
         }
     }
 
@@ -152,6 +157,8 @@ impl Viewer {
         self.frame_group = self
             .pipelines
             .frame_group(&self.device, &self.frame_buffer, &self.palette_buffer);
+        let names: Vec<&str> = state.rig.bones.iter().map(|b| b.name.as_str()).collect();
+        self.gizmo = Gizmo::for_joints(&names);
         self.pose = Some(state);
         self.upload_pose();
         if let Some(stand) = self.clip_index(LOAD_POSE_CLIP) {
@@ -193,6 +200,7 @@ impl Viewer {
         if let Some(state) = self.pose.as_mut() {
             state.rest();
             self.upload_pose();
+            self.rebase_gizmo();
         }
     }
 
@@ -207,6 +215,7 @@ impl Viewer {
         let locals = clip_locals_at(&state.avatar, &state.rig, clip, frame)?;
         state.set_locals(locals);
         self.upload_pose();
+        self.rebase_gizmo();
         Ok(())
     }
 
@@ -221,6 +230,7 @@ impl Viewer {
         }
         state.set_locals(locals.iter().map(from_mat4).collect());
         self.upload_pose();
+        self.rebase_gizmo();
         Ok(())
     }
 
@@ -230,6 +240,7 @@ impl Viewer {
         let rig = from_local_pose(&state.avatar, bones)?;
         state.set_locals(rig.bones.iter().map(|b| b.local).collect());
         self.upload_pose();
+        self.rebase_gizmo();
         Ok(())
     }
 
@@ -310,23 +321,252 @@ impl Viewer {
 
     /// Each joint's position in pixels of the last rendered size, `None` outside the depth range.
     pub fn bone_screen_positions(&self) -> Vec<Option<Vec2>> {
-        let (w, h) = self.last_size;
-        let vp = self.camera.view_projection(w, h);
-        let project = |m: &M4| {
-            let t = mat_trans(m);
-            let clip = vp * Vec4::new(t[0] as f32, t[1] as f32, t[2] as f32, 1.0);
-            if clip.w <= 0.0 {
-                return None;
+        let view = self.view();
+        self.joint_positions()
+            .into_iter()
+            .map(|p| view.project_in_depth(p))
+            .collect()
+    }
+
+    /// Sets the pixel size picking and `bone_screen_positions` use; `render` sets it too.
+    pub fn set_viewport_size(&mut self, width: u32, height: u32) {
+        self.last_size = (width.max(1), height.max(1));
+    }
+
+    // ---- free-pose gizmo ----
+
+    pub fn gizmo(&self) -> &Gizmo {
+        &self.gizmo
+    }
+
+    /// Selection and mode; `Gizmo::select` and `Gizmo::set_mode` enforce the bones.js rules.
+    pub fn gizmo_mut(&mut self) -> &mut Gizmo {
+        &mut self.gizmo
+    }
+
+    /// Turning free pose on captures the current pose as the reset target, clears edits and selects the head.
+    /// Turning it off hides markers and handles and keeps the edited pose.
+    pub fn set_gizmo_enabled(&mut self, enabled: bool) {
+        if enabled && !self.gizmo.enabled() {
+            self.gizmo.base = self.pose.as_ref().map(|p| p.locals.clone()).unwrap_or_default();
+            self.gizmo.edits.clear();
+        }
+        if enabled != self.gizmo.enabled() {
+            self.gizmo.set_enabled(enabled);
+        }
+    }
+
+    /// Nearest listed joint marker under a viewport pixel, as the bones.js pointer handler picks.
+    pub fn pick_joint(&self, x: f32, y: f32) -> Option<usize> {
+        self.gizmo
+            .pick_marker(&self.view(), &self.joint_positions(), Vec2::new(x, y))
+    }
+
+    /// Updates handle hover; true when a handle or marker is under the pointer.
+    pub fn gizmo_hover(&mut self, x: f32, y: f32) -> bool {
+        if !self.gizmo.enabled() {
+            return false;
+        }
+        if self.gizmo.is_dragging() {
+            return true;
+        }
+        let px = Vec2::new(x, y);
+        let view = self.view();
+        let handle = self
+            .selected_frame()
+            .and_then(|frame| self.gizmo.pick_handle(&view, &frame, px));
+        self.gizmo.set_hovered(handle);
+        handle.is_some()
+            || self
+                .gizmo
+                .pick_marker(&view, &self.joint_positions(), px)
+                .is_some()
+    }
+
+    /// Starts a handle drag, or selects the marker's joint and arms a free drag on it.
+    /// False when nothing was hit, leaving the press to the camera.
+    pub fn gizmo_press(&mut self, x: f32, y: f32) -> bool {
+        if !self.gizmo.enabled() || self.pose.is_none() {
+            return false;
+        }
+        let px = Vec2::new(x, y);
+        let view = self.view();
+        let on_handle = self
+            .selected_frame()
+            .and_then(|frame| self.gizmo.pick_handle(&view, &frame, px))
+            .and_then(|handle| Some((self.gizmo.selected()?, handle)));
+        let hit = on_handle.or_else(|| {
+            let joint = self.gizmo.pick_marker(&view, &self.joint_positions(), px)?;
+            Some((joint, Handle::Free))
+        });
+        let Some((joint, handle)) = hit else {
+            return false;
+        };
+        if self.gizmo.selected() != Some(joint) {
+            self.gizmo.select(joint);
+        }
+        if let (Some(frame), Some(local)) = (self.joint_frame(joint), self.joint_local(joint)) {
+            self.gizmo.begin_drag(&view, joint, frame, handle, local, px);
+        }
+        true
+    }
+
+    /// Moves the active handle; true when the pose changed.
+    pub fn gizmo_drag(&mut self, x: f32, y: f32) -> bool {
+        let view = self.view();
+        let Some((joint, rotation, translation)) = self.gizmo.drag_to(&view, Vec2::new(x, y)) else {
+            return false;
+        };
+        self.ensure_gizmo_base();
+        self.gizmo
+            .edits
+            .insert(joint, PoseEdit::from_local(joint, rotation, translation));
+        self.apply_pose_edits().is_ok()
+    }
+
+    pub fn gizmo_release(&mut self) {
+        self.gizmo.end_drag();
+    }
+
+    /// A pixel on a handle of the selected joint's gizmo, for hit tests and tooltips.
+    pub fn gizmo_handle_position(&self, handle: Handle) -> Option<Vec2> {
+        let frame = self.selected_frame()?;
+        self.gizmo.handle_position(&self.view(), &frame, handle)
+    }
+
+    /// Edited joints with their current values, by joint index.
+    pub fn pose_edits(&self) -> Vec<PoseEdit> {
+        self.gizmo.edits.values().copied().collect()
+    }
+
+    /// Current local rotation and position of any joint, edited or not, for the X/Y/Z fields.
+    pub fn joint_pose(&self, joint: usize) -> Option<PoseEdit> {
+        let (rotation, translation) = self.joint_local(joint)?;
+        Some(PoseEdit::from_local(joint, rotation, translation))
+    }
+
+    /// Writes the numeric fields' values for `joint` and reposes.
+    pub fn set_pose_edit(&mut self, joint: usize, edit: PoseEdit) -> Result<()> {
+        let count = self.pose.as_ref().ok_or(ViewError::NoScene)?.locals.len();
+        if joint >= count {
+            return Err(ViewError::JointCount {
+                expected: count,
+                got: joint + 1,
+            });
+        }
+        self.ensure_gizmo_base();
+        self.gizmo.edits.insert(joint, PoseEdit { joint, ..edit });
+        self.apply_pose_edits()
+    }
+
+    /// Reset bone: the joint returns to the pose captured when free pose turned on.
+    pub fn reset_joint(&mut self, joint: usize) -> Result<()> {
+        self.gizmo.edits.remove(&joint);
+        self.apply_pose_edits()
+    }
+
+    /// Reset pose: every joint returns to the captured pose.
+    pub fn reset_pose(&mut self) -> Result<()> {
+        self.gizmo.edits.clear();
+        self.apply_pose_edits()
+    }
+
+    /// Base pose with the edits applied, through `from_local_pose` as `set_free_pose` applies a serialized pose.
+    fn apply_pose_edits(&mut self) -> Result<()> {
+        self.ensure_gizmo_base();
+        let state = self.pose.as_mut().ok_or(ViewError::NoScene)?;
+        let bones: Vec<PoseBone> = state
+            .rig
+            .bones
+            .iter()
+            .zip(&self.gizmo.base)
+            .enumerate()
+            .map(|(i, (bone, base))| {
+                let (rotation, translation) = match self.gizmo.edits.get(&i) {
+                    Some(edit) => (edit.rotation(), edit.translation),
+                    None => {
+                        let (_, r, t) = to_mat4(base).to_scale_rotation_translation();
+                        (r, t)
+                    }
+                };
+                PoseBone {
+                    name: safe_id(&bone.name),
+                    position: translation.to_array().map(f64::from),
+                    rotation: rotation.to_array().map(f64::from),
+                }
+            })
+            .collect();
+        let rig = from_local_pose(&state.avatar, &bones)?;
+        state.set_locals(rig.bones.iter().map(|b| b.local).collect());
+        self.upload_pose();
+        Ok(())
+    }
+
+    fn ensure_gizmo_base(&mut self) {
+        if let Some(state) = self.pose.as_ref() {
+            if self.gizmo.base.len() != state.locals.len() {
+                self.gizmo.base = state.locals.clone();
             }
-            let ndc = clip.truncate() / clip.w;
-            (0.0..=1.0)
-                .contains(&ndc.z)
-                .then(|| Vec2::new((ndc.x + 1.0) * 0.5 * w as f32, (1.0 - ndc.y) * 0.5 * h as f32))
+        }
+    }
+
+    /// An external pose replaces the reset target while free pose is on.
+    fn rebase_gizmo(&mut self) {
+        if self.gizmo.enabled() {
+            self.gizmo.base = self.pose.as_ref().map(|p| p.locals.clone()).unwrap_or_default();
+            self.gizmo.edits.clear();
+            self.gizmo.end_drag();
+        }
+    }
+
+    fn view(&self) -> View {
+        View::new(&self.camera, self.last_size.0, self.last_size.1)
+    }
+
+    fn joint_positions(&self) -> Vec<Vec3> {
+        let point = |m: &M4| {
+            let t = mat_trans(m);
+            Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32)
         };
         self.pose
             .as_ref()
-            .map(|p| p.worlds.iter().map(project).collect())
+            .map(|p| p.worlds.iter().map(point).collect())
             .unwrap_or_default()
+    }
+
+    fn joint_local(&self, joint: usize) -> Option<(Quat, Vec3)> {
+        let local = self.pose.as_ref()?.locals.get(joint)?;
+        let (_, r, t) = to_mat4(local).to_scale_rotation_translation();
+        Some((r, t))
+    }
+
+    fn joint_frame(&self, joint: usize) -> Option<JointFrame> {
+        let state = self.pose.as_ref()?;
+        let rotation_of = |m: &M4| to_mat4(m).to_scale_rotation_translation().1;
+        let world = state.worlds.get(joint)?;
+        let parent_rotation = usize::try_from(state.rig.bones.get(joint)?.parent)
+            .ok()
+            .and_then(|p| state.worlds.get(p))
+            .map_or(Quat::IDENTITY, rotation_of);
+        let t = mat_trans(world);
+        Some(JointFrame {
+            center: Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32),
+            rotation: rotation_of(world),
+            parent_rotation,
+        })
+    }
+
+    fn selected_frame(&self) -> Option<JointFrame> {
+        self.joint_frame(self.gizmo.selected()?)
+    }
+
+    fn overlay_vertices(&self, width: u32, height: u32) -> Vec<OverlayVertex> {
+        if !self.gizmo.enabled() {
+            return Vec::new();
+        }
+        let view = View::new(&self.camera, width, height);
+        self.gizmo
+            .overlay(&view, &self.joint_positions(), self.selected_frame().as_ref())
     }
 
     /// Records the viewport into `view`, a `color_format` target of `width` x `height`.
@@ -348,8 +588,9 @@ impl Viewer {
             0,
             bytemuck::bytes_of(&self.frame_uniform(width, height)),
         );
+        let overlay = gpu::overlay_buffer(&self.device, &self.overlay_vertices(width, height));
         if let Some(targets) = self.targets.as_ref() {
-            self.encode(encoder, view, targets, &self.frame_group);
+            self.encode(encoder, view, targets, &self.frame_group, overlay.as_ref());
         }
     }
 
@@ -395,7 +636,8 @@ impl Viewer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("avatar-view offscreen"),
         });
-        self.encode(&mut encoder, &view, &targets, &group);
+        let overlay = gpu::overlay_buffer(device, &self.overlay_vertices(width, height));
+        self.encode(&mut encoder, &view, &targets, &group, overlay.as_ref());
         let mut pixels = gpu::read_texture(device, queue, encoder, &color, width, height)?;
         if bgra {
             for px in pixels.as_chunks_mut::<4>().0 {
@@ -437,6 +679,7 @@ impl Viewer {
         view: &wgpu::TextureView,
         targets: &Targets,
         frame_group: &wgpu::BindGroup,
+        overlay: Option<&(wgpu::Buffer, u32)>,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("avatar-view"),
@@ -472,6 +715,11 @@ impl Viewer {
             pass.draw(0..6, 0..1);
         }
         self.draw_meshes(&mut pass, true);
+        if let Some((buffer, count)) = overlay {
+            pass.set_pipeline(&self.pipelines.overlay);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..*count, 0..1);
+        }
         drop(pass);
         if let Some((_, group)) = targets.msaa.as_ref() {
             self.resolve(encoder, view, group);
