@@ -425,7 +425,7 @@ impl eframe::App for AuraApp {
         let (title, blurb) = match self.tab {
             Tab::Import => (
                 "Import avatar items into your closet",
-                "Validate STFS containers or raw .bin files, then add their items and awards to your closet.",
+                "Preview STFS containers or raw .bin files, then add their items and awards to your closet.",
             ),
             Tab::Export => (
                 "Export your avatar as a 3D model",
