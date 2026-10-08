@@ -402,6 +402,14 @@ pub fn button_padded(ui: &mut Ui, label: &str, kind: Kind, enabled: bool, pad: V
     response
 }
 
+/// The size `button` would give `label`, for buttons that keep one width across label changes.
+pub fn button_size(ui: &Ui, label: &str) -> Vec2 {
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font(13.0, W::Regular), c::BUTTON_TEXT);
+    vec2(galley.size().x + 20.0, line(13.0) + 16.0)
+}
+
 /// A button stretched to `rect`.
 pub fn button_in(ui: &mut Ui, rect: Rect, label: &str, kind: Kind, enabled: bool) -> Response {
     let galley = ui

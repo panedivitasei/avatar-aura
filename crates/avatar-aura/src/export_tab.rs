@@ -1335,7 +1335,8 @@ impl ExportTab {
     fn transport_footer(&mut self, ui: &mut egui::Ui) {
         let usable = self.clip.is_some() && !self.no_animation && !self.free_pose && self.loaded.is_some();
         let label = if self.playing { "Pause" } else { "Play" };
-        if widgets::button(ui, label, Kind::Short, usable).clicked() {
+        let (rect, _) = ui.allocate_exact_size(widgets::button_size(ui, "Pause"), egui::Sense::hover());
+        if widgets::button_in(ui, rect, label, Kind::Short, usable).clicked() {
             if self.playing {
                 self.pause();
             } else {
