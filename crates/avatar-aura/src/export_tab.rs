@@ -554,19 +554,19 @@ impl ExportTab {
                 let Some(faces) = faces else {
                     return Ok(outcome(0));
                 };
-                let done = faces.len();
+                let base = loaded.expressions.len();
                 send(faces);
-                if cancel.load(Ordering::Relaxed) {
-                    return Ok(outcome(done));
-                }
-                let scratch = tiles::scratch_dir(session);
-                let clips = tiles::clip_tiles(&loaded, &scratch);
-                // A leftover folder only costs disk space under the cache.
-                let _ = std::fs::remove_dir_all(&scratch);
-                if cancel.load(Ordering::Relaxed) {
-                    return Ok(outcome(done));
-                }
-                send(clips?);
+                let clips = tiles::clip_tiles(&loaded, &gpu, &textures, &cancel, &mut |done| {
+                    reply.send(Msg::TileProgress {
+                        session,
+                        done: base + done,
+                        total,
+                    });
+                })?;
+                let Some(clips) = clips else {
+                    return Ok(outcome(base));
+                };
+                send(clips);
                 Ok(outcome(total))
             })()
             .map_err(|e| format!("{e:#}"));

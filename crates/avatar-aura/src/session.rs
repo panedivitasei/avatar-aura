@@ -428,6 +428,22 @@ pub fn prepare_face(loaded: &Loaded, clip: usize, cache: &TextureCache) -> anyho
     })
 }
 
+/// Head textures the face player shows on `frame` of scene clip `scene_index`.
+pub fn face_frame_textures(
+    loaded: &Loaded,
+    scene_index: usize,
+    frame: usize,
+    cache: &TextureCache,
+) -> anyhow::Result<ExpressionTextures> {
+    let animation = face_animation::prepare(&loaded.avatar, scene_index)?;
+    let entry = animation
+        .sequence
+        .get(frame)
+        .and_then(|i| animation.entries.get(*i))
+        .ok_or_else(|| anyhow!("{} has no frame {frame}", animation.name))?;
+    resolve_entry(loaded, &entry.textures, cache)
+}
+
 /// Free-pose bones in the editor's serialized form from rig-local matrices.
 pub fn pose_bones(names: &[String], locals: &[glam::Mat4]) -> Vec<PoseBone> {
     names
