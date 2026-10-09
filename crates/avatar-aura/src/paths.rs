@@ -64,9 +64,9 @@ pub fn jmstudios_dir() -> PathBuf {
     home_dir().unwrap_or_default().join("Documents").join("JMstudios")
 }
 
-/// `Documents/JMstudios/userdata/avatar/manifest`, where the Avatar Editor recomp keeps the saved avatar.
+/// `Documents/JMstudios/userdata/avatar`, where the Avatar Editor recomp keeps the saved avatar.
 pub fn shared_avatar_dir() -> PathBuf {
-    jmstudios_dir().join("userdata").join("avatar").join("manifest")
+    jmstudios_dir().join("userdata").join("avatar")
 }
 
 pub fn default_manifest() -> String {
