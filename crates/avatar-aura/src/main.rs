@@ -60,6 +60,7 @@ fn run_window(load_avatar: bool) -> eframe::Result {
         .with_title("avatar aura")
         .with_inner_size([size[0].max(940.0), size[1].max(680.0)])
         .with_min_inner_size([940.0, 680.0])
+        .with_maximized(true)
         .with_drag_and_drop(true);
     if let Some(icon) = icon() {
         viewport = viewport.with_icon(Arc::new(icon));
