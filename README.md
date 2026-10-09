@@ -20,7 +20,7 @@ Desktop tool for Xbox 360 avatars for use with [AvatarEditorRecomp](https://gith
 
 ## Building
 
-1. `cargo run -p build-assets -- <path to AErecomp assets>`
+1. `cargo run -p build-assets -- <path to AErecomp/assets>`
 2. `cargo build --release`
 
 ## Credits
