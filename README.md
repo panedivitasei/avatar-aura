@@ -20,9 +20,8 @@ Desktop tool for Xbox 360 avatars for use with [AvatarEditorRecomp](https://gith
 
 ## Building
 
-1. Install Rust and clone AvatarEditorRecomp.
-2. `cargo run -p build-assets -- <path to AErecomp>`
-3. `cargo build --release`
+1. `cargo run -p build-assets -- <path to AErecomp assets>`
+2. `cargo build --release`
 
 ## Credits
 
