@@ -2,7 +2,6 @@
 
 use eframe::wgpu;
 
-use crate::viewport::Gpu;
 
 /// D3D12 first, then a discrete GPU.
 pub fn rank(info: &wgpu::AdapterInfo) -> (bool, bool) {
@@ -27,23 +26,3 @@ pub fn window_backends() -> (wgpu::Backends, String) {
     }
 }
 
-/// A headless high-performance device on the window's backends, for `--smoke`.
-pub fn headless() -> anyhow::Result<(Gpu, String)> {
-    let (backends, note) = window_backends();
-    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-    desc.backends = backends;
-    let instance = wgpu::Instance::new(desc);
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-        ..Default::default()
-    }))
-    .map_err(|e| anyhow::anyhow!("no {note} adapter: {e}"))?;
-    let info = adapter.get_info();
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
-    Ok((
-        Gpu { device, queue },
-        format!("{} ({:?}); {note}", info.name, info.backend),
-    ))
-}

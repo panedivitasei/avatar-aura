@@ -31,23 +31,15 @@ pub fn exe_dir() -> PathBuf {
 }
 
 /// `%USERPROFILE%\Documents\ReXGlue`, the shared workspace of the editor tools.
-fn workspace() -> PathBuf {
-    home_dir().unwrap_or_default().join("Documents").join("ReXGlue")
-}
-
 pub fn userdata() -> PathBuf {
     if let Some(configured) = std::env::var_os("AVATAR_AURA_USERDATA") {
         return expand(&configured.to_string_lossy());
     }
     let shared = jmstudios_dir().join("userdata");
-    [
-        exe_dir().join("userdata"),
-        shared.clone(),
-        workspace().join("userdata"),
-    ]
-    .into_iter()
-    .find(|c| c.is_dir())
-    .unwrap_or(shared)
+    [exe_dir().join("userdata"), shared.clone()]
+        .into_iter()
+        .find(|c| c.is_dir())
+        .unwrap_or(shared)
 }
 
 fn asset_roots() -> Vec<PathBuf> {
@@ -55,7 +47,6 @@ fn asset_roots() -> Vec<PathBuf> {
         userdata().join("avatarpack"),
         assets_dir(),
         exe_dir(),
-        workspace().join("ae-sub").join("assets"),
     ]
 }
 
@@ -70,14 +61,8 @@ pub fn shared_avatar_dir() -> PathBuf {
 }
 
 pub fn default_manifest() -> String {
-    [
-        shared_avatar_dir().join("avatar_manifest.bin"),
-        userdata().join("avatars").join("avatar_manifest.bin"),
-    ]
-    .into_iter()
-    .find(|p| p.is_file())
-    .map(|p| p.display().to_string())
-    .unwrap_or_default()
+    let manifest = shared_avatar_dir().join("avatar_manifest.bin");
+    if manifest.is_file() { manifest.display().to_string() } else { String::new() }
 }
 
 pub fn default_pack() -> String {

@@ -133,11 +133,9 @@ impl ExportTab {
         }
     }
 
-    /// Activity log line, echoed to stdout when the app runs from a console.
+    /// Activity log line.
     fn note(&mut self, line: impl Into<String>) {
-        let line = line.into();
-        println!("{line}");
-        self.log.push(line);
+        self.log.push(line.into());
     }
 
     pub fn note_line(&mut self, line: String) {

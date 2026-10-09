@@ -15,7 +15,6 @@ mod jobs;
 mod paths;
 mod session;
 mod settings;
-mod smoke;
 mod tiles;
 mod viewport;
 mod widgets;
@@ -86,22 +85,14 @@ fn run_window(load_avatar: bool) -> eframe::Result {
 }
 
 fn main() -> ExitCode {
-    if std::env::args().any(|a| a == "--smoke") {
-        return match smoke::run() {
-            Ok(()) => {
-                println!("smoke: ok");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("smoke: {e:#}");
-                ExitCode::FAILURE
-            }
-        };
-    }
     match run_window(std::env::args().any(|a| a == "--load-avatar")) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("avatar aura could not start: {e}");
+            rfd::MessageDialog::new()
+                .set_title("avatar aura")
+                .set_description(&format!("avatar aura could not start: {e}"))
+                .set_level(rfd::MessageLevel::Error)
+                .show();
             ExitCode::FAILURE
         }
     }
